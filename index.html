@@ -2157,6 +2157,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .know-dist-card .chart-title { margin-bottom:8px; }
 
 </style>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <div id="app">
@@ -2285,6 +2286,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
           </div>
           <input type="file" id="ics-import-file" accept=".ics,text/calendar" class="hidden">
         </div>
+        <!-- Google Calendar Live Sync -->
+        <div class="card set-group">
+          <div class="card-title">Google Calendar Sync (Live)</div>
+          <p class="card-sub" style="margin:6px 0 16px;line-height:1.5;">Connect your Google account to automatically push Important Dates and Task due dates as events on your actual Google Calendar. Existing events are updated in place — no duplicates on repeat syncs.</p>
+          <div class="set-row">
+            <button class="btn-ghost" id="gcal-connect-btn" style="color:var(--accent-info);border-color:var(--accent-info);">Connect Google Calendar</button>
+            <button class="btn-ghost hidden" id="gcal-sync-btn" style="color:var(--accent-success);border-color:var(--accent-success);">Sync Now</button>
+          </div>
+          <div id="gcal-status" class="card-sub" style="margin-top:10px;color:var(--text-muted);"></div>
+        </div>
         <!-- About -->
         <div class="card set-group">
           <div class="about-logo">NIBO<b>FLOW</b></div>
@@ -2394,7 +2405,7 @@ function formatMoney(amount){
 /* ---------- DATA LAYER ---------- */
 const STORE_KEY = 'niboflow_data';
 const DEFAULT_DATA = {
-  settings:{language:'en',currency:'USD',theme:'dark'},
+  settings:{language:'en',currency:'USD',theme:'dark',lastExportAt:null,lastDataChangeAt:null,backupSnoozeUntil:null},
   budget:{incomes:[],categories:[
     {id:'housing',name:'Housing',budget:0,color:'#3B82F6',icon:'home'},
     {id:'transport',name:'Transportation',budget:0,color:'#8B5CF6',icon:'car'},
@@ -2448,7 +2459,12 @@ function loadData(){
     DATA = raw ? deepMerge(structuredClone(DEFAULT_DATA), JSON.parse(raw)) : structuredClone(DEFAULT_DATA);
   } catch(e){ DATA = structuredClone(DEFAULT_DATA); }
 }
-function saveData(){ try { localStorage.setItem(STORE_KEY, JSON.stringify(DATA)); } catch(e){} }
+function saveData(){
+  try {
+    if(DATA.settings) DATA.settings.lastDataChangeAt = Date.now();
+    localStorage.setItem(STORE_KEY, JSON.stringify(DATA));
+  } catch(e){}
+}
 function exportData(){
   const blob = new Blob([JSON.stringify(DATA,null,2)],{type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -2457,6 +2473,68 @@ function exportData(){
   a.href = url; a.download = `niboflow_backup_${d}.json`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
+  if(DATA.settings){
+    DATA.settings.lastExportAt = Date.now();
+    DATA.settings.backupSnoozeUntil = null;
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(DATA)); } catch(e){}
+  }
+  hideBackupBanner();
+}
+/* ---------- BACKUP REMINDER ---------- */
+const BACKUP_REMINDER_MS = 7*24*60*60*1000; // weekly
+const BACKUP_SNOOZE_MS = 3*24*60*60*1000;   // 3-day snooze
+function shouldShowBackupReminder(){
+  if(!DATA.settings) return false;
+  const now = Date.now();
+  const snoozeUntil = DATA.settings.backupSnoozeUntil;
+  if(snoozeUntil && now < snoozeUntil) return false;
+  const lastExport = DATA.settings.lastExportAt;
+  const lastChange = DATA.settings.lastDataChangeAt;
+  if(!lastChange) return false; // nothing entered yet, nothing to lose
+  if(!lastExport) return (now - lastChange) > BACKUP_REMINDER_MS; // real data present, never exported
+  const sinceExport = now - lastExport;
+  const changedSinceExport = lastChange > lastExport;
+  return sinceExport > BACKUP_REMINDER_MS && changedSinceExport;
+}
+function snoozeBackupReminder(){
+  if(!DATA.settings) return;
+  DATA.settings.backupSnoozeUntil = Date.now() + BACKUP_SNOOZE_MS;
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(DATA)); } catch(e){}
+  hideBackupBanner();
+}
+function dismissBackupReminder(){
+  if(!DATA.settings) return;
+  DATA.settings.backupSnoozeUntil = Date.now() + BACKUP_REMINDER_MS;
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(DATA)); } catch(e){}
+  hideBackupBanner();
+}
+function hideBackupBanner(){
+  const el = document.getElementById('backup-reminder-banner');
+  if(el) el.remove();
+}
+function showBackupBannerIfNeeded(){
+  hideBackupBanner();
+  if(!shouldShowBackupReminder()) return;
+  const banner = document.createElement('div');
+  banner.id = 'backup-reminder-banner';
+  banner.style.cssText = 'position:fixed;bottom:20px;right:20px;max-width:360px;background:var(--bg-secondary);border:1px solid var(--accent-gold);border-radius:var(--card-radius);box-shadow:0 8px 24px var(--shadow);padding:16px 18px;z-index:9999;font-family:"DM Sans",sans-serif;';
+  banner.innerHTML = `
+    <div style="display:flex;align-items:flex-start;gap:10px;">
+      <div style="font-size:20px;line-height:1;">💾</div>
+      <div style="flex:1;">
+        <div style="font-weight:600;color:var(--text-primary);font-size:14px;margin-bottom:4px;">Back up your data</div>
+        <div style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">It's been a while since your last export, and you've added new entries. Want to save a backup?</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button id="backup-export-now" style="background:var(--accent);color:#fff;border:none;border-radius:var(--input-radius);padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;">Export Now</button>
+          <button id="backup-snooze" style="background:transparent;color:var(--text-secondary);border:1px solid var(--border);border-radius:var(--input-radius);padding:6px 12px;font-size:12px;cursor:pointer;">Snooze 3 days</button>
+          <button id="backup-dismiss" style="background:transparent;color:var(--text-muted);border:none;padding:6px 4px;font-size:12px;cursor:pointer;">Dismiss</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(banner);
+  document.getElementById('backup-export-now').addEventListener('click', exportData);
+  document.getElementById('backup-snooze').addEventListener('click', snoozeBackupReminder);
+  document.getElementById('backup-dismiss').addEventListener('click', dismissBackupReminder);
 }
 function importData(file){
   const reader = new FileReader();
@@ -2608,6 +2686,124 @@ function resetData(){
   DATA = structuredClone(DEFAULT_DATA);
   state.lang='en'; state.currency='USD'; state.theme='dark';
   saveData(); applyAll(); closeModal();
+}
+
+/* ---------- GOOGLE CALENDAR LIVE SYNC ---------- */
+const GCAL_CLIENT_ID = '550985326207-agte8h41no37d2hd83e8vliogn6ptgke.apps.googleusercontent.com';
+const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+let gcalTokenClient = null;
+let gcalAccessToken = null;
+let gcalTokenExpiresAt = 0;
+
+function gcalSetStatus(msg){
+  const el = document.getElementById('gcal-status');
+  if(el) el.textContent = msg;
+}
+function gcalUpdateUI(){
+  const connectBtn = document.getElementById('gcal-connect-btn');
+  const syncBtn = document.getElementById('gcal-sync-btn');
+  if(!connectBtn || !syncBtn) return;
+  if(gcalAccessToken){
+    connectBtn.textContent = 'Reconnect Google Calendar';
+    syncBtn.classList.remove('hidden');
+  } else {
+    connectBtn.textContent = 'Connect Google Calendar';
+    syncBtn.classList.add('hidden');
+  }
+}
+function gcalTokenCallback(resp){
+  if(resp.error){
+    gcalSetStatus('Sign-in failed or was cancelled. Try again.');
+    return;
+  }
+  gcalAccessToken = resp.access_token;
+  gcalTokenExpiresAt = Date.now() + (Number(resp.expires_in||3500) * 1000);
+  gcalUpdateUI();
+  gcalSetStatus('Connected. Syncing now...');
+  gcalSyncNow();
+}
+function gcalEnsureTokenClient(cb){
+  function proceed(){
+    if(!gcalTokenClient){
+      gcalTokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: GCAL_CLIENT_ID,
+        scope: GCAL_SCOPE,
+        callback: gcalTokenCallback
+      });
+    }
+    cb();
+  }
+  if(window.google && window.google.accounts && window.google.accounts.oauth2){
+    proceed();
+  } else {
+    let tries = 0;
+    const iv = setInterval(() => {
+      tries++;
+      if(window.google && window.google.accounts && window.google.accounts.oauth2){
+        clearInterval(iv); proceed();
+      } else if(tries > 50){
+        clearInterval(iv);
+        gcalSetStatus('Could not load Google sign-in. Check your connection and refresh the page.');
+      }
+    }, 100);
+  }
+}
+function gcalConnect(){
+  gcalEnsureTokenClient(() => {
+    gcalTokenClient.requestAccessToken();
+  });
+}
+async function gcalSyncNow(){
+  if(!gcalAccessToken || Date.now() > gcalTokenExpiresAt){
+    gcalSetStatus('Session expired — please reconnect.');
+    gcalAccessToken = null;
+    gcalUpdateUI();
+    return;
+  }
+  const items = [];
+  (DATA.importantDates || []).forEach(d => {
+    if(!d.date) return;
+    items.push({ ref: d, summary: d.name || 'Important Date', date: d.date, kind: 'Important Date' });
+  });
+  (DATA.tasks || []).forEach(tk => {
+    if(!tk.due || tk.status === 'done') return;
+    items.push({ ref: tk, summary: 'Task: ' + (tk.title || 'Untitled'), date: tk.due, kind: 'Task' });
+  });
+  let created = 0, updated = 0, failed = 0;
+  gcalSetStatus(`Syncing ${items.length} item${items.length===1?'':'s'}...`);
+  for(const item of items){
+    const body = {
+      summary: item.summary,
+      description: `Synced from NIBOFLOW Life Planner (${item.kind})`,
+      start: { date: item.date },
+      end: { date: item.date }
+    };
+    try {
+      if(item.ref.gcalId){
+        const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${item.ref.gcalId}`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${gcalAccessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if(resp.ok) updated++; else failed++;
+      } else {
+        const resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${gcalAccessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if(resp.ok){
+          const j = await resp.json();
+          item.ref.gcalId = j.id;
+          created++;
+        } else failed++;
+      }
+    } catch(e){ failed++; }
+  }
+  saveData();
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  gcalSetStatus(`Last synced ${timeStr} — ${created} created, ${updated} updated${failed ? `, ${failed} failed` : ''}.`);
 }
 
 /* ---------- APP STATE ---------- */
@@ -3141,6 +3337,11 @@ function wireEvents(){
   document.getElementById('ics-export-btn').addEventListener('click',exportICS);
   document.getElementById('ics-import-btn').addEventListener('click',()=>document.getElementById('ics-import-file').click());
   document.getElementById('ics-import-file').addEventListener('change',e=>{ if(e.target.files[0]){ importICS(e.target.files[0]); e.target.value=''; } });
+  const gcalConnectBtn = document.getElementById('gcal-connect-btn');
+  const gcalSyncBtn = document.getElementById('gcal-sync-btn');
+  if(gcalConnectBtn) gcalConnectBtn.addEventListener('click', gcalConnect);
+  if(gcalSyncBtn) gcalSyncBtn.addEventListener('click', gcalSyncNow);
+  gcalUpdateUI();
   // hash routing
   window.addEventListener('hashchange',()=>{ const h=location.hash.replace('#',''); if(h&&h!==state.section) navigateTo(h); });
   // re-render charts on resize (debounced)
@@ -3182,6 +3383,7 @@ function init(){
   pomoState.remaining = POMO_PHASES[pomoState.phase].mins * 60;
   bindFloatingTimer();
   updateFloatingTimer();
+  setTimeout(showBackupBannerIfNeeded, 1200);
 }
 document.addEventListener('DOMContentLoaded',init);
 
