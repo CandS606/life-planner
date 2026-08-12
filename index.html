@@ -2289,10 +2289,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
         <!-- Google Calendar Live Sync -->
         <div class="card set-group">
           <div class="card-title">Google Calendar Sync (Live)</div>
-          <p class="card-sub" style="margin:6px 0 16px;line-height:1.5;">Connect your Google account to automatically push Important Dates and Task due dates as events on your actual Google Calendar. Existing events are updated in place — no duplicates on repeat syncs.</p>
+          <p class="card-sub" style="margin:6px 0 16px;line-height:1.5;">Connect your Google account to automatically push Important Dates and Task due dates as events on your actual Google Calendar. Existing events are updated in place — no duplicates on repeat syncs. You can also pull your existing Google Calendar events into this planner's Calendar view.</p>
           <div class="set-row">
             <button class="btn-ghost" id="gcal-connect-btn" style="color:var(--accent-info);border-color:var(--accent-info);">Connect Google Calendar</button>
-            <button class="btn-ghost hidden" id="gcal-sync-btn" style="color:var(--accent-success);border-color:var(--accent-success);">Sync Now</button>
+            <button class="btn-ghost hidden" id="gcal-sync-btn" style="color:var(--accent-success);border-color:var(--accent-success);">Sync Now (Push)</button>
+            <button class="btn-ghost hidden" id="gcal-pull-btn" style="color:#4A86E8;border-color:#4A86E8;">Pull from Google</button>
           </div>
           <div id="gcal-status" class="card-sub" style="margin-top:10px;color:var(--text-muted);"></div>
         </div>
@@ -2419,6 +2420,7 @@ const DEFAULT_DATA = {
     {id:'other',name:'Other',budget:0,color:'#64748B',icon:'more'}
   ]},
   transactions:[],
+  recurringTransactions:[],
   savings:{goals:[],contributions:[]},
   debts:[],
   subscriptions:[],
@@ -2431,6 +2433,7 @@ const DEFAULT_DATA = {
   events:[],
   importantDates:[],
   importedEvents:[],
+  gcalImportedEvents:[],
   fitness:{},
   meals:{categories:[],meals:{},ingredients:{}},
   groceryList:[],
@@ -2702,13 +2705,16 @@ function gcalSetStatus(msg){
 function gcalUpdateUI(){
   const connectBtn = document.getElementById('gcal-connect-btn');
   const syncBtn = document.getElementById('gcal-sync-btn');
-  if(!connectBtn || !syncBtn) return;
+  const pullBtn = document.getElementById('gcal-pull-btn');
+  if(!connectBtn || !syncBtn || !pullBtn) return;
   if(gcalAccessToken){
     connectBtn.textContent = 'Reconnect Google Calendar';
     syncBtn.classList.remove('hidden');
+    pullBtn.classList.remove('hidden');
   } else {
     connectBtn.textContent = 'Connect Google Calendar';
     syncBtn.classList.add('hidden');
+    pullBtn.classList.add('hidden');
   }
 }
 function gcalTokenCallback(resp){
@@ -2721,6 +2727,7 @@ function gcalTokenCallback(resp){
   gcalUpdateUI();
   gcalSetStatus('Connected. Syncing now...');
   gcalSyncNow();
+  gcalPullEvents();
 }
 function gcalEnsureTokenClient(cb){
   function proceed(){
@@ -2804,6 +2811,42 @@ async function gcalSyncNow(){
   const now = new Date();
   const timeStr = now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
   gcalSetStatus(`Last synced ${timeStr} — ${created} created, ${updated} updated${failed ? `, ${failed} failed` : ''}.`);
+}
+async function gcalPullEvents(){
+  if(!gcalAccessToken || Date.now() > gcalTokenExpiresAt){
+    gcalSetStatus('Session expired — please reconnect.');
+    gcalAccessToken = null;
+    gcalUpdateUI();
+    return;
+  }
+  gcalSetStatus('Pulling events from Google Calendar...');
+  const timeMin = new Date(Date.now() - 90*24*60*60*1000).toISOString();
+  const timeMax = new Date(Date.now() + 365*24*60*60*1000).toISOString();
+  const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime&maxResults=250`;
+  try {
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${gcalAccessToken}` } });
+    if(!resp.ok){
+      gcalSetStatus('Could not pull events — please try again.');
+      return;
+    }
+    const data = await resp.json();
+    const items = (data.items || []).filter(ev => {
+      const desc = ev.description || '';
+      return !desc.includes('Synced from NIBOFLOW Life Planner'); // skip our own pushed events
+    });
+    const pulled = items.map(ev => {
+      const dateStr = (ev.start && (ev.start.date || (ev.start.dateTime || '').slice(0,10))) || '';
+      return { date: dateStr, title: ev.summary || '(untitled)', gcalId: ev.id };
+    }).filter(e => e.date);
+    DATA.gcalImportedEvents = pulled;
+    saveData();
+    if (state.section === 'calendar') renderCalendar();
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    gcalSetStatus(`Last pulled ${timeStr} — ${pulled.length} event${pulled.length===1?'':'s'} imported from Google Calendar.`);
+  } catch(e){
+    gcalSetStatus('Could not pull events — please try again.');
+  }
 }
 
 /* ---------- APP STATE ---------- */
@@ -3339,8 +3382,10 @@ function wireEvents(){
   document.getElementById('ics-import-file').addEventListener('change',e=>{ if(e.target.files[0]){ importICS(e.target.files[0]); e.target.value=''; } });
   const gcalConnectBtn = document.getElementById('gcal-connect-btn');
   const gcalSyncBtn = document.getElementById('gcal-sync-btn');
+  const gcalPullBtn = document.getElementById('gcal-pull-btn');
   if(gcalConnectBtn) gcalConnectBtn.addEventListener('click', gcalConnect);
   if(gcalSyncBtn) gcalSyncBtn.addEventListener('click', gcalSyncNow);
+  if(gcalPullBtn) gcalPullBtn.addEventListener('click', gcalPullEvents);
   gcalUpdateUI();
   // hash routing
   window.addEventListener('hashchange',()=>{ const h=location.hash.replace('#',''); if(h&&h!==state.section) navigateTo(h); });
@@ -3369,6 +3414,8 @@ function init(){
   ensurePart6Defaults();
   ensurePart7Defaults();
   ensurePart8Defaults();
+  if (!DATA.recurringTransactions) DATA.recurringTransactions = [];
+  generateRecurringTransactions();
   state.lang=DATA.settings.language||'en';
   state.currency=DATA.settings.currency||'USD';
   state.theme=DATA.settings.theme||'dark';
@@ -3541,6 +3588,7 @@ function renderBudgetOverview() {
 /* ---------- TRANSACTIONS TAB ---------- */
 let txFilters = { from:'', to:'', cat:'', type:'', q:'', page:1, sortKey:'date', sortDir:'desc' };
 let txAddType = 'expense';
+let txEditId = null;
 const TX_PAGE_SIZE = 20;
 
 function renderBudgetTransactions() {
@@ -3550,7 +3598,7 @@ function renderBudgetTransactions() {
 
   pane.innerHTML = `
     <div class="card" style="margin-bottom:16px;">
-      <div class="card-title">${t('budget_add_transaction')}</div>
+      <div class="card-title" id="tx-form-title">${t('budget_add_transaction')}</div>
       <div class="form-row" style="margin-top:14px;">
         <div><label class="field-label">${t('budget_date')}</label><input type="date" class="input-field" id="tx-date" value="${todayStr()}"></div>
         <div><label class="field-label">${t('budget_amount')}</label><input type="number" step="0.01" min="0" class="input-field" id="tx-amount" placeholder="0.00"></div>
@@ -3565,8 +3613,24 @@ function renderBudgetTransactions() {
         </div>
         <div><label class="field-label">${t('budget_subcategory')}</label><input class="input-field" id="tx-sub" placeholder=""></div>
         <div><label class="field-label">${t('budget_description')}</label><input class="input-field" id="tx-desc" placeholder=""></div>
-        <div><label class="field-label">&nbsp;</label><button class="btn-primary" id="tx-add" style="width:100%;justify-content:center;">${icon('plus',14)}<span>${t('common_add')}</span></button></div>
+        <div style="display:flex;align-items:flex-end;">
+          <label style="display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:13px;cursor:pointer;padding-bottom:10px;">
+            <input type="checkbox" id="tx-recurring" style="width:16px;height:16px;">
+            🔁 Repeat monthly
+          </label>
+        </div>
+        <div><label class="field-label">&nbsp;</label>
+          <div style="display:flex;gap:8px;">
+            <button class="btn-primary" id="tx-add" style="width:100%;justify-content:center;">${icon('plus',14)}<span id="tx-add-label">${t('common_add')}</span></button>
+            <button class="btn-ghost hidden" id="tx-cancel-edit" style="white-space:nowrap;">${t('common_cancel')||'Cancel'}</button>
+          </div>
+        </div>
       </div>
+    </div>
+
+    <div class="card hidden" id="recurring-list-card" style="margin-bottom:16px;">
+      <div class="card-title">🔁 Recurring Monthly Transactions</div>
+      <div id="recurring-list-wrap" style="margin-top:10px;"></div>
     </div>
 
     <div class="card">
@@ -3585,9 +3649,11 @@ function renderBudgetTransactions() {
     </div>
   `;
 
+  txEditId = null;
   setTxType(txAddType);
   document.getElementById('tx-type-expense').addEventListener('click', () => setTxType('expense'));
   document.getElementById('tx-type-income').addEventListener('click', () => setTxType('income'));
+  document.getElementById('tx-cancel-edit').addEventListener('click', () => resetTxForm());
 
   document.getElementById('tx-add').addEventListener('click', () => {
     const date = document.getElementById('tx-date').value;
@@ -3595,18 +3661,37 @@ function renderBudgetTransactions() {
     const categoryId = document.getElementById('tx-cat').value;
     const sub = document.getElementById('tx-sub').value.trim();
     const desc = document.getElementById('tx-desc').value.trim();
+    const recurring = document.getElementById('tx-recurring').checked;
     if (!date || isNaN(amount) || amount <= 0) {
       const amt = document.getElementById('tx-amount');
       amt.style.borderColor = 'var(--accent-danger)';
       setTimeout(() => { amt.style.borderColor = ''; }, 1500);
       return;
     }
-    DATA.transactions.push({ id: uid(), date, amount, categoryId, subcategory: sub, description: desc, type: txAddType });
+    if (txEditId) {
+      const tx = DATA.transactions.find(x => x.id === txEditId);
+      if (tx) {
+        tx.date = date; tx.amount = amount; tx.categoryId = categoryId;
+        tx.subcategory = sub; tx.description = desc; tx.type = txAddType;
+      }
+      resetTxForm();
+    } else {
+      const newTx = { id: uid(), date, amount, categoryId, subcategory: sub, description: desc, type: txAddType };
+      if (recurring) {
+        const day = new Date(date + 'T00:00:00').getDate();
+        const recId = uid();
+        DATA.recurringTransactions.push({ id: recId, day, amount, categoryId, subcategory: sub, description: desc, type: txAddType });
+        newTx.recurringId = recId;
+      }
+      DATA.transactions.push(newTx);
+    }
     saveData();
     document.getElementById('tx-amount').value = '';
     document.getElementById('tx-sub').value = '';
     document.getElementById('tx-desc').value = '';
+    document.getElementById('tx-recurring').checked = false;
     drawTxTable();
+    renderRecurringList();
   });
 
   ['flt-from','flt-to','flt-cat','flt-type','flt-q'].forEach(id => {
@@ -3616,6 +3701,7 @@ function renderBudgetTransactions() {
   });
 
   drawTxTable();
+  renderRecurringList();
 }
 
 function setTxType(which) {
@@ -3631,6 +3717,91 @@ function setTxType(which) {
   }
 }
 
+function resetTxForm() {
+  txEditId = null;
+  const title = document.getElementById('tx-form-title');
+  const label = document.getElementById('tx-add-label');
+  const cancelBtn = document.getElementById('tx-cancel-edit');
+  const recurringChk = document.getElementById('tx-recurring');
+  if (title) title.textContent = t('budget_add_transaction');
+  if (label) label.textContent = t('common_add');
+  if (cancelBtn) cancelBtn.classList.add('hidden');
+  if (recurringChk) { recurringChk.checked = false; recurringChk.disabled = false; }
+  document.getElementById('tx-date').value = todayStr();
+  document.getElementById('tx-amount').value = '';
+  document.getElementById('tx-sub').value = '';
+  document.getElementById('tx-desc').value = '';
+  setTxType('expense');
+}
+function editTransaction(id) {
+  const tx = DATA.transactions.find(x => x.id === id);
+  if (!tx) return;
+  txEditId = id;
+  document.getElementById('tx-form-title').textContent = 'Edit Transaction';
+  document.getElementById('tx-add-label').textContent = t('common_update') || 'Update';
+  document.getElementById('tx-cancel-edit').classList.remove('hidden');
+  document.getElementById('tx-date').value = tx.date;
+  document.getElementById('tx-amount').value = tx.amount;
+  document.getElementById('tx-cat').value = tx.categoryId;
+  document.getElementById('tx-sub').value = tx.subcategory || '';
+  document.getElementById('tx-desc').value = tx.description || '';
+  const recurringChk = document.getElementById('tx-recurring');
+  recurringChk.checked = !!tx.recurringId;
+  recurringChk.disabled = true; // recurring status set at creation only, keep simple
+  setTxType(tx.type);
+  document.getElementById('tx-form-title').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function generateRecurringTransactions() {
+  if (!DATA.recurringTransactions || !DATA.recurringTransactions.length) return;
+  const now = new Date();
+  const ym = now.toISOString().slice(0,7); // YYYY-MM
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+  let changed = false;
+  DATA.recurringTransactions.forEach(rec => {
+    const already = (DATA.transactions||[]).some(tx => tx.recurringId === rec.id && tx.date.startsWith(ym));
+    if (already) return;
+    const day = Math.min(rec.day, daysInMonth);
+    const dateStr = `${ym}-${String(day).padStart(2,'0')}`;
+    DATA.transactions.push({
+      id: uid(), date: dateStr, amount: rec.amount, categoryId: rec.categoryId,
+      subcategory: rec.subcategory, description: rec.description, type: rec.type, recurringId: rec.id
+    });
+    changed = true;
+  });
+  if (changed) saveData();
+}
+function renderRecurringList() {
+  const card = document.getElementById('recurring-list-card');
+  const wrap = document.getElementById('recurring-list-wrap');
+  if (!card || !wrap) return;
+  const cats = DATA.budget.categories || [];
+  const catMap = {}; cats.forEach(c => catMap[c.id] = c);
+  const recs = DATA.recurringTransactions || [];
+  if (!recs.length) { card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  wrap.innerHTML = recs.map(r => {
+    const c = catMap[r.categoryId] || { name: '—', color: '#64748B' };
+    const sign = r.type === 'income' ? '+' : '-';
+    const color = r.type === 'income' ? '#22C55E' : '#EF4444';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span class="cat-dot" style="background:${c.color}"></span>
+        <span>${escapeHtml(r.description || c.name)}</span>
+        <span style="color:var(--text-muted);font-size:12px;">Day ${r.day} of each month</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="color:${color};font-weight:600;">${sign}${formatMoney(r.amount)}</span>
+        <button class="row-btn del" data-recid="${r.id}" title="Stop recurring">${icon('trash',14)}</button>
+      </div>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('button[data-recid]').forEach(b => b.addEventListener('click', e => {
+    const recId = e.currentTarget.dataset.recid;
+    DATA.recurringTransactions = DATA.recurringTransactions.filter(r => r.id !== recId);
+    saveData();
+    renderRecurringList();
+  }));
+}
 function drawTxTable() {
   const wrap = document.getElementById('tx-table-wrap');
   if (!wrap) return;
@@ -3693,13 +3864,14 @@ function drawTxTable() {
           const colorAmt = tx.type === 'income' ? '#22C55E' : '#EF4444';
           const sign = tx.type === 'income' ? '+' : '-';
           return `<tr data-id="${tx.id}">
-            <td>${dateStr}</td>
+            <td>${dateStr}${tx.recurringId ? ' 🔁' : ''}</td>
             <td class="num" style="color:${colorAmt};font-weight:600;">${sign}${formatMoney(tx.amount)}</td>
             <td><span class="cat-dot" style="background:${c.color}"></span>${escapeHtml(c.name)}</td>
             <td style="color:var(--text-secondary);">${escapeHtml(tx.subcategory||'—')}</td>
             <td style="color:var(--text-secondary);">${escapeHtml(tx.description||'—')}</td>
             <td><span class="sub-cat-badge" style="text-transform:none;">${tx.type==='income'?t('budget_income'):t('budget_expense')}</span></td>
             <td><div class="row-actions">
+              <button class="row-btn" data-act="edit" title="${t('common_edit')||'Edit'}">${icon('edit',14)}</button>
               <button class="row-btn del" data-act="del" title="${t('common_delete')}">${icon('trash',14)}</button>
             </div></td>
           </tr>`;
@@ -3728,6 +3900,10 @@ function drawTxTable() {
     const id = e.currentTarget.closest('tr').dataset.id;
     DATA.transactions = DATA.transactions.filter(t => t.id !== id);
     saveData(); drawTxTable();
+  }));
+  wrap.querySelectorAll('button[data-act="edit"]').forEach(b => b.addEventListener('click', e => {
+    const id = e.currentTarget.closest('tr').dataset.id;
+    editTransaction(id);
   }));
   const prev = document.getElementById('pg-prev'), next = document.getElementById('pg-next');
   if (prev) prev.addEventListener('click', () => { if (txFilters.page>1) { txFilters.page--; drawTxTable(); } });
@@ -6504,6 +6680,7 @@ function collectDayEvents(ds) {
     (DATA.events || []).filter(e => e.date === ds).forEach(e => events.push({ type: 'event', color: '#F59E0B', icon: '⭐', title: e.title }));
     (DATA.importantDates || []).filter(e => (e.date || '').slice(5) === md).forEach(e => events.push({ type: 'imp', color: '#F59E0B', icon: '🎉', title: e.name }));
     (DATA.importedEvents || []).filter(e => e.date === ds).forEach(e => events.push({ type: 'imported', color: '#8B5CF6', icon: '📅', title: e.title }));
+    (DATA.gcalImportedEvents || []).filter(e => e.date === ds).forEach(e => events.push({ type: 'gcal', color: '#4A86E8', icon: '📆', title: e.title }));
   }
   if (calFilters.nospend) {
     if (DATA.noSpendStreak.log[ds] === 'nospend') events.push({ type: 'nospend', color: '#FBBF24', icon: '🔥', title: t('nospend_streak') });
