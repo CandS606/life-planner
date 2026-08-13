@@ -2430,6 +2430,7 @@ const DEFAULT_DATA = {
   impulseCooldowns:[],
   pomodoroSessions:[],
   timeBlocks:{},
+  timeBlockTemplate:null,
   events:[],
   importantDates:[],
   importedEvents:[],
@@ -3455,6 +3456,7 @@ function init(){
   ensurePart8Defaults();
   if (!DATA.recurringTransactions) DATA.recurringTransactions = [];
   generateRecurringTransactions();
+  generateRecurringTimeBlocks();
   state.lang=DATA.settings.language||'en';
   state.currency=DATA.settings.currency||'USD';
   state.theme=DATA.settings.theme||'dark';
@@ -6470,6 +6472,12 @@ function tbSlots() {
   }
   return slots;
 }
+function to12h(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  const period = h >= 12 ? 'PM' : 'AM';
+  let h12 = h % 12; if (h12 === 0) h12 = 12;
+  return `${h12}:${String(m).padStart(2,'0')} ${period}`;
+}
 
 function buildTimeBlockSectionHTML() {
   return `<div class="section-wrap">
@@ -6481,7 +6489,11 @@ function buildTimeBlockSectionHTML() {
         <button class="tb-arrow" id="tb-next">›</button>
       </div>
       <div class="tb-day-name" id="tb-day-label"></div>
+      <button class="btn-ghost" id="tb-recurring-btn" style="color:var(--accent);border-color:var(--accent);margin-left:auto;">🔁 Repeat This Schedule</button>
+      <button class="btn-ghost" id="tb-gcal-sync-btn" style="color:#4A86E8;border-color:#4A86E8;">📆 Sync Day to Google Calendar</button>
     </div>
+    <div id="tb-recurring-status" class="card-sub" style="margin-top:6px;color:var(--text-muted);font-size:12px;"></div>
+    <div id="tb-gcal-status" class="card-sub" style="margin-top:6px;color:var(--text-muted);font-size:12px;"></div>
     <div class="tb-main-task" id="tb-main-task"></div>
     <h3 class="section-h3">${t('time_schedule')}</h3>
     <div class="tb-schedule" id="tb-schedule"></div>
@@ -6520,7 +6532,10 @@ function renderTimeBlock() {
       document.getElementById('tb-wtask-desc').value = '';
       saveData(); drawTimeBlockWeeklyTasks();
     });
+    document.getElementById('tb-gcal-sync-btn').addEventListener('click', gcalSyncTimeBlockDay);
+    document.getElementById('tb-recurring-btn').addEventListener('click', openTbRecurringModal);
   }
+  updateTbRecurringStatus();
   drawTimeBlockContent();
 }
 
@@ -6551,7 +6566,7 @@ function drawTimeBlockContent() {
     const v = day.slots[s] || { activity: '', type: '' };
     const typeCls = v.type ? `type-${v.type}` : '';
     return `<div class="tb-slot ${typeCls}" data-slot="${s}">
-      <div class="tb-time">${s}</div>
+      <div class="tb-time">${to12h(s)}</div>
       <input type="text" class="tb-activity" data-slot="${s}" value="${p4esc(v.activity||'')}" placeholder="—">
       <select class="tb-type" data-slot="${s}">
         ${TB_TYPES.map(tt => `<option value="${tt.id}" ${v.type===tt.id?'selected':''}>${tt.id?t(tt.label):'—'}</option>`).join('')}
@@ -6580,6 +6595,169 @@ function drawTimeBlockContent() {
   drawTimeBlockWeeklyTasks();
 }
 
+function tbComputeBlocks(day) {
+  // Merge consecutive 30-min slots sharing the same activity+type into single blocks
+  const slots = tbSlots();
+  const blocks = [];
+  let current = null;
+  slots.forEach(s => {
+    const v = (day.slots || {})[s] || { activity: '', type: '' };
+    const active = v.activity && v.activity.trim();
+    if (active) {
+      if (current && current.activity === v.activity && current.type === v.type && current.endSlot === s) {
+        // extend current block
+        const [h, m] = s.split(':').map(Number);
+        const endMin = h * 60 + m + 30;
+        current.endSlot = `${String(Math.floor(endMin/60)).padStart(2,'0')}:${String(endMin%60).padStart(2,'0')}`;
+      } else {
+        if (current) blocks.push(current);
+        const [h, m] = s.split(':').map(Number);
+        const endMin = h * 60 + m + 30;
+        current = { start: s, endSlot: `${String(Math.floor(endMin/60)).padStart(2,'0')}:${String(endMin%60).padStart(2,'0')}`, activity: v.activity, type: v.type };
+      }
+    } else {
+      if (current) { blocks.push(current); current = null; }
+    }
+  });
+  if (current) blocks.push(current);
+  return blocks;
+}
+async function gcalSyncTimeBlockDay() {
+  const statusEl = document.getElementById('tb-gcal-status');
+  if (!gcalAccessToken || Date.now() > gcalTokenExpiresAt) {
+    if (statusEl) statusEl.textContent = 'Connect Google Calendar in Settings first.';
+    return;
+  }
+  const day = DATA.timeBlocks[tbViewDate];
+  if (!day) { if (statusEl) statusEl.textContent = 'Nothing to sync for this day.'; return; }
+  const blocks = tbComputeBlocks(day);
+  const prevBlocks = day.gcalBlocks || [];
+  if (statusEl) statusEl.textContent = `Syncing ${blocks.length} block${blocks.length===1?'':'s'}...`;
+  let created = 0, updated = 0, deleted = 0, failed = 0;
+  const stillUsed = new Set();
+  for (const b of blocks) {
+    const typeInfo = TB_TYPES.find(x => x.id === b.type);
+    const label = typeInfo && b.type ? `${t(typeInfo.label)}: ${b.activity}` : b.activity;
+    const prev = prevBlocks.find(p => p.start === b.start && p.activity === b.activity && p.type === b.type);
+    const body = {
+      summary: label,
+      description: 'Synced from NIBOFLOW Life Planner (Time Block)',
+      start: { dateTime: `${tbViewDate}T${b.start}:00`, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles' },
+      end: { dateTime: `${tbViewDate}T${b.endSlot}:00`, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles' }
+    };
+    try {
+      if (prev && prev.gcalId) {
+        const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${prev.gcalId}`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${gcalAccessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (resp.ok) { updated++; b.gcalId = prev.gcalId; stillUsed.add(prev.gcalId); } else failed++;
+      } else {
+        const resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${gcalAccessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (resp.ok) { const j = await resp.json(); b.gcalId = j.id; stillUsed.add(j.id); created++; } else failed++;
+      }
+    } catch(e) { failed++; }
+  }
+  // delete events for blocks that no longer exist (cleared slots)
+  for (const p of prevBlocks) {
+    if (p.gcalId && !stillUsed.has(p.gcalId)) {
+      try {
+        await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${p.gcalId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${gcalAccessToken}` }
+        });
+        deleted++;
+      } catch(e) { /* ignore */ }
+    }
+  }
+  day.gcalBlocks = blocks;
+  saveData();
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  if (statusEl) statusEl.textContent = `Last synced ${timeStr} — ${created} created, ${updated} updated, ${deleted} removed${failed ? `, ${failed} failed` : ''}.`;
+}
+function updateTbRecurringStatus() {
+  const el = document.getElementById('tb-recurring-status');
+  if (!el) return;
+  const tpl = DATA.timeBlockTemplate;
+  if (!tpl) { el.textContent = ''; return; }
+  const labels = { daily: 'every day', weekdays: 'weekdays (Mon–Fri)', weekly: 'weekly on this day' };
+  el.innerHTML = `🔁 Active recurring schedule: repeats ${labels[tpl.pattern] || tpl.pattern}. <a href="#" id="tb-clear-recurring" style="color:var(--accent-danger);text-decoration:underline;">Stop repeating</a>`;
+  const clearBtn = document.getElementById('tb-clear-recurring');
+  if (clearBtn) clearBtn.addEventListener('click', e => {
+    e.preventDefault();
+    DATA.timeBlockTemplate = null;
+    saveData();
+    updateTbRecurringStatus();
+  });
+}
+function openTbRecurringModal() {
+  const day = DATA.timeBlocks[tbViewDate];
+  const hasSlots = day && Object.values(day.slots || {}).some(s => s.activity && s.activity.trim());
+  if (!hasSlots) {
+    openModal(`<div class="modal-box"><h3>Repeat This Schedule</h3><p class="card-sub" style="margin-top:10px;">This day doesn't have any activities filled in yet. Add some to your schedule first, then come back to set it as recurring.</p><div class="modal-actions"><button class="btn-primary" id="tb-rec-close">${t('common_close')}</button></div></div>`);
+    document.getElementById('tb-rec-close').addEventListener('click', closeModal);
+    return;
+  }
+  const dow = new Date(tbViewDate).toLocaleDateString('en-US', { weekday: 'long' });
+  openModal(`<div class="modal-box">
+    <h3>Repeat This Schedule</h3>
+    <p class="card-sub" style="margin-top:10px;">Copy today's schedule forward automatically. Days you've already customized won't be overwritten.</p>
+    <div class="modal-form" style="margin-top:14px;">
+      <div class="field-mini">
+        <label>Repeat</label>
+        <select class="input-field" id="tb-rec-pattern">
+          <option value="daily">Every day</option>
+          <option value="weekdays">Weekdays only (Mon–Fri)</option>
+          <option value="weekly">Weekly, every ${dow}</option>
+        </select>
+      </div>
+      <button class="btn-primary" id="tb-rec-save" style="margin-top:14px;">Save Recurring Schedule</button>
+    </div>
+    <div class="modal-actions"><button class="btn-ghost" id="tb-rec-cancel">${t('common_cancel')}</button></div>
+  </div>`);
+  document.getElementById('tb-rec-cancel').addEventListener('click', closeModal);
+  document.getElementById('tb-rec-save').addEventListener('click', () => {
+    const pattern = document.getElementById('tb-rec-pattern').value;
+    DATA.timeBlockTemplate = {
+      slots: structuredClone(day.slots),
+      pattern,
+      sourceDow: new Date(tbViewDate).getDay()
+    };
+    saveData();
+    closeModal();
+    generateRecurringTimeBlocks();
+    updateTbRecurringStatus();
+  });
+}
+function generateRecurringTimeBlocks() {
+  const tpl = DATA.timeBlockTemplate;
+  if (!tpl) return;
+  let changed = false;
+  for (let i = 0; i <= 13; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    const ds = d.toISOString().slice(0, 10);
+    const dow = d.getDay(); // 0=Sun..6=Sat
+    let matches = false;
+    if (tpl.pattern === 'daily') matches = true;
+    else if (tpl.pattern === 'weekdays') matches = dow >= 1 && dow <= 5;
+    else if (tpl.pattern === 'weekly') matches = dow === tpl.sourceDow;
+    if (!matches) continue;
+    const existing = DATA.timeBlocks[ds];
+    const isEmpty = !existing || !Object.values(existing.slots || {}).some(s => s.activity && s.activity.trim());
+    if (isEmpty) {
+      DATA.timeBlocks[ds] = { mainTask: existing ? existing.mainTask : '', description: existing ? existing.description : '', slots: structuredClone(tpl.slots) };
+      changed = true;
+    }
+  }
+  if (changed) saveData();
+}
 function drawTimeBlockCharts() {
   // donut: time distribution for current day
   const day = DATA.timeBlocks[tbViewDate] || { slots: {} };
@@ -7857,6 +8035,7 @@ function openChoresMembersModal() {
    ========================================================= */
 let notesTab = 'notes';
 let notesSearch = '';
+let notesTagFilter = '';
 
 const MOOD_OPTS = [
   { id: 'great',    emoji: '😊', key: 'journal_great' },
@@ -7901,9 +8080,11 @@ function renderNotesPane() {
     <div class="notes-toolbar">
       <h3 class="section-h3" style="margin:0;">${t('notes_title')}</h3>
       <input type="text" class="notes-search" id="nt-search" placeholder="${t('notes_search')}" value="${p5esc(notesSearch)}">
+      <button class="btn-ghost" id="nt-bulk-import-btn" style="white-space:nowrap;">📥 Bulk Import</button>
     </div>
     <div class="note-add">
       <input type="text" id="nt-title" placeholder="${t('common_title')}">
+      <input type="text" id="nt-tags" placeholder="Tags (comma separated, e.g. Voss Group, Ideas)" style="margin-top:8px;">
       <textarea id="nt-body" placeholder="**bold** *italic* — - bullet"></textarea>
       <div class="note-add-actions">
         <label class="pin-toggle"><input type="checkbox" id="nt-pin"> 📌 ${t('notes_pin')}</label>
@@ -7911,17 +8092,22 @@ function renderNotesPane() {
         <button class="btn-primary" id="nt-save">+ ${t('notes_add')}</button>
       </div>
     </div>
+    <div id="nt-tag-filters" style="margin:12px 0;"></div>
     <div class="notes-grid" id="nt-grid"></div>
   `;
   document.getElementById('nt-search').addEventListener('input', e => { notesSearch = e.target.value; drawNotesGrid(); });
+  document.getElementById('nt-bulk-import-btn').addEventListener('click', openBulkImportModal);
   document.getElementById('nt-save').addEventListener('click', () => {
     const title = document.getElementById('nt-title').value.trim();
     const body = document.getElementById('nt-body').value.trim();
+    const tagsRaw = document.getElementById('nt-tags').value.trim();
+    const tags = tagsRaw ? tagsRaw.split(',').map(x => x.trim()).filter(Boolean) : [];
     const pinned = document.getElementById('nt-pin').checked;
     if (!title && !body) return;
-    DATA.notes.push({ id: p5uid(), title, body, pinned, createdAt: new Date().toISOString() });
+    DATA.notes.push({ id: p5uid(), title, body, tags, pinned, createdAt: new Date().toISOString() });
     document.getElementById('nt-title').value = '';
     document.getElementById('nt-body').value = '';
+    document.getElementById('nt-tags').value = '';
     document.getElementById('nt-pin').checked = false;
     saveData(); drawNotesGrid();
   });
@@ -7953,11 +8139,29 @@ function nt_renderBody(s) {
 function drawNotesGrid() {
   const grid = document.getElementById('nt-grid');
   const q = notesSearch.toLowerCase();
-  const filt = (DATA.notes || []).filter(n => !q || (n.title || '').toLowerCase().includes(q) || (n.body || '').toLowerCase().includes(q));
+  const allTags = [...new Set((DATA.notes || []).flatMap(n => n.tags || []))].sort();
+  const filterWrap = document.getElementById('nt-tag-filters');
+  if (filterWrap) {
+    if (allTags.length) {
+      filterWrap.innerHTML = allTags.map(tag => `<button class="tag-chip ${notesTagFilter===tag?'active':''}" data-tag="${p5esc(tag)}" style="display:inline-block;margin:0 6px 6px 0;padding:4px 12px;border-radius:999px;font-size:12px;cursor:pointer;border:1px solid ${notesTagFilter===tag?'var(--accent)':'var(--border)'};background:${notesTagFilter===tag?'var(--accent)':'transparent'};color:${notesTagFilter===tag?'#fff':'var(--text-secondary)'};">${p5esc(tag)}</button>`).join('') +
+        (notesTagFilter ? `<button class="tag-chip" id="nt-clear-tag" style="display:inline-block;margin:0 6px 6px 0;padding:4px 12px;border-radius:999px;font-size:12px;cursor:pointer;border:1px solid var(--accent-danger);background:transparent;color:var(--accent-danger);">✕ Clear filter</button>` : '');
+      filterWrap.querySelectorAll('[data-tag]').forEach(b => b.addEventListener('click', () => { notesTagFilter = notesTagFilter === b.dataset.tag ? '' : b.dataset.tag; drawNotesGrid(); }));
+      const clearBtn = document.getElementById('nt-clear-tag');
+      if (clearBtn) clearBtn.addEventListener('click', () => { notesTagFilter = ''; drawNotesGrid(); });
+    } else {
+      filterWrap.innerHTML = '';
+    }
+  }
+  const filt = (DATA.notes || []).filter(n => {
+    const matchesQ = !q || (n.title || '').toLowerCase().includes(q) || (n.body || '').toLowerCase().includes(q);
+    const matchesTag = !notesTagFilter || (n.tags || []).includes(notesTagFilter);
+    return matchesQ && matchesTag;
+  });
   const sorted = filt.sort((a, b) => (b.pinned?1:0) - (a.pinned?1:0) || (b.createdAt || '').localeCompare(a.createdAt || ''));
   if (!sorted.length) { grid.innerHTML = `<div class="chart-empty" style="grid-column:1/-1;padding:30px;">${t('notes_no_notes')}</div>`; return; }
   grid.innerHTML = sorted.map(n => `<div class="note-card ${n.pinned?'pinned':''}" data-id="${n.id}">
     <div class="nt"><div class="ttl">${p5esc(n.title)||'<em style="opacity:.5;">(no title)</em>'}</div>${n.pinned?'<span class="pin-ic">📌</span>':''}</div>
+    ${(n.tags && n.tags.length) ? `<div style="margin:4px 0 6px;">${n.tags.map(tg => `<span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:999px;background:var(--bg-tertiary);color:var(--text-secondary);margin-right:4px;">${p5esc(tg)}</span>`).join('')}</div>` : ''}
     <div class="body">${nt_renderBody(n.body||'')}</div>
     <div class="meta">
       <span>${new Date(n.createdAt).toLocaleDateString(p5locale(),{month:'short',day:'numeric',year:'numeric'})}</span>
@@ -7974,13 +8178,79 @@ function drawNotesGrid() {
   grid.querySelectorAll('.note-card').forEach(c => c.addEventListener('click', () => openNoteEdit(c.dataset.id)));
 }
 
+function parseBulkNotes(text) {
+  const lines = text.split('\n');
+  const notes = [];
+  let current = null;
+  lines.forEach(line => {
+    const headerMatch = line.match(/^##\s+(.+)/);
+    if (headerMatch) {
+      if (current) notes.push(current);
+      current = { title: headerMatch[1].trim(), tags: [], bodyLines: [] };
+    } else if (current) {
+      const tagMatch = line.match(/^@(.+)/);
+      if (tagMatch && current.bodyLines.length === 0) {
+        current.tags = tagMatch[1].split(',').map(x => x.trim()).filter(Boolean);
+      } else {
+        current.bodyLines.push(line);
+      }
+    }
+  });
+  if (current) notes.push(current);
+  return notes.map(n => ({
+    title: n.title,
+    tags: n.tags,
+    body: n.bodyLines.join('\n').trim()
+  })).filter(n => n.title || n.body);
+}
+function openBulkImportModal() {
+  openModal(`<div class="modal-box lg">
+    <h3>📥 Bulk Import Notes</h3>
+    <p class="card-sub" style="margin-top:8px;line-height:1.6;">Paste multiple notes at once. Start each note with <code>## Title</code>. Optionally add a tag line right after starting with <code>@Tag1, Tag2</code>. Everything else becomes the note body.</p>
+    <div class="field-mini" style="margin-top:12px;">
+      <textarea id="bi-text" style="min-height:260px;font-family:monospace;font-size:13px;" placeholder="## Meeting notes - Luis Luna
+@Voss Group, CLEATUS
+Discussed SAM.gov integration timeline...
+
+## Grocery ideas
+@Personal
+Try the new chili recipe..."></textarea>
+    </div>
+    <div id="bi-preview" class="card-sub" style="margin-top:10px;color:var(--text-muted);"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="bi-cancel">${t('common_cancel')}</button>
+      <button class="btn-primary" id="bi-import">Import Notes</button>
+    </div>
+  </div>`);
+  const textEl = document.getElementById('bi-text');
+  const preview = document.getElementById('bi-preview');
+  const updatePreview = () => {
+    const parsed = parseBulkNotes(textEl.value);
+    preview.textContent = parsed.length ? `Ready to import ${parsed.length} note${parsed.length===1?'':'s'}.` : 'Paste text using the ## format above to see a preview.';
+  };
+  textEl.addEventListener('input', updatePreview);
+  updatePreview();
+  document.getElementById('bi-cancel').addEventListener('click', closeModal);
+  document.getElementById('bi-import').addEventListener('click', () => {
+    const parsed = parseBulkNotes(textEl.value);
+    if (!parsed.length) return;
+    const now = new Date().toISOString();
+    parsed.forEach(n => {
+      DATA.notes.push({ id: p5uid(), title: n.title, body: n.body, tags: n.tags, pinned: false, createdAt: now });
+    });
+    saveData();
+    closeModal();
+    drawNotesGrid();
+  });
+}
 function openNoteEdit(id) {
   const n = DATA.notes.find(x => x.id === id); if (!n) return;
   openModal(`<div class="modal-box lg">
     <h3>${t('common_edit')}</h3>
     <div class="modal-form">
       <div class="field-mini"><label>${t('common_title')}</label><input type="text" id="ne-title" value="${p5esc(n.title)}"></div>
-      <div class="field-mini"><label>${t('tasks_description')}</label><textarea id="ne-body" style="min-height:200px;">${p5esc(n.body)}</textarea></div>
+      <div class="field-mini" style="margin-top:8px;"><label>Tags (comma separated)</label><input type="text" id="ne-tags" value="${p5esc((n.tags||[]).join(', '))}"></div>
+      <div class="field-mini" style="margin-top:8px;"><label>${t('tasks_description')}</label><textarea id="ne-body" style="min-height:200px;">${p5esc(n.body)}</textarea></div>
       <label class="pin-toggle"><input type="checkbox" id="ne-pin" ${n.pinned?'checked':''}> 📌 ${t('notes_pin')}</label>
     </div>
     <div class="modal-actions">
@@ -7992,6 +8262,8 @@ function openNoteEdit(id) {
   document.getElementById('ne-save').addEventListener('click', () => {
     n.title = document.getElementById('ne-title').value.trim();
     n.body = document.getElementById('ne-body').value.trim();
+    const tagsRaw = document.getElementById('ne-tags').value.trim();
+    n.tags = tagsRaw ? tagsRaw.split(',').map(x => x.trim()).filter(Boolean) : [];
     n.pinned = document.getElementById('ne-pin').checked;
     saveData(); closeModal(); drawNotesGrid();
   });
