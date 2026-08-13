@@ -2770,21 +2770,60 @@ async function gcalSyncNow(){
   const items = [];
   (DATA.importantDates || []).forEach(d => {
     if(!d.date) return;
-    items.push({ ref: d, summary: d.name || 'Important Date', date: d.date, kind: 'Important Date' });
+    const isAppt = !!(d.time || d.location || d.phone || d.contact || d.video);
+    if (isAppt) {
+      const descParts = [];
+      if (d.contact) descParts.push(`Contact: ${d.contact}`);
+      if (d.phone) descParts.push(`Phone: ${d.phone}`);
+      if (d.location) descParts.push(`Location: ${d.location}`);
+      if (d.video) descParts.push(`Video link: ${d.video}`);
+      if (d.notes) descParts.push(`Notes: ${d.notes}`);
+      descParts.push('', 'Synced from NIBOFLOW Life Planner (Appointment)');
+      items.push({
+        ref: d, summary: d.name || 'Appointment', kind: 'Appointment',
+        timed: true, date: d.date, time: d.time || '09:00',
+        location: d.location || '', description: descParts.join('\n')
+      });
+    } else {
+      items.push({ ref: d, summary: d.name || 'Important Date', date: d.date, kind: 'Important Date', timed: false });
+    }
   });
   (DATA.tasks || []).forEach(tk => {
     if(!tk.due || tk.status === 'done') return;
-    items.push({ ref: tk, summary: 'Task: ' + (tk.title || 'Untitled'), date: tk.due, kind: 'Task' });
+    items.push({ ref: tk, summary: 'Task: ' + (tk.title || 'Untitled'), date: tk.due, kind: 'Task', timed: false });
+  });
+  (DATA.subscriptions || []).forEach(s => {
+    if(!s.nextRenewal || s.cancelled || s.active === false) return;
+    items.push({ ref: s, summary: `Bill Due: ${s.name || 'Subscription'} (${formatMoney(s.amount||0)})`, date: s.nextRenewal, kind: 'Bill', timed: false, billReminder: true });
   });
   let created = 0, updated = 0, failed = 0;
   gcalSetStatus(`Syncing ${items.length} item${items.length===1?'':'s'}...`);
   for(const item of items){
-    const body = {
-      summary: item.summary,
-      description: `Synced from NIBOFLOW Life Planner (${item.kind})`,
-      start: { date: item.date },
-      end: { date: item.date }
-    };
+    let body;
+    if (item.timed) {
+      const startDT = `${item.date}T${item.time}:00`;
+      const endDate = new Date(`${item.date}T${item.time}:00`);
+      endDate.setMinutes(endDate.getMinutes() + 60);
+      const endDT = endDate.toISOString().slice(0,19);
+      body = {
+        summary: item.summary,
+        description: item.description,
+        location: item.location,
+        start: { dateTime: startDT, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles' },
+        end: { dateTime: endDT, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles' },
+        reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 1440 }, { method: 'popup', minutes: 30 }] }
+      };
+    } else {
+      body = {
+        summary: item.summary,
+        description: `Synced from NIBOFLOW Life Planner (${item.kind})`,
+        start: { date: item.date },
+        end: { date: item.date }
+      };
+      if (item.billReminder) {
+        body.reminders = { useDefault: false, overrides: [{ method: 'popup', minutes: 2*24*60 }, { method: 'popup', minutes: 1*24*60 }] };
+      }
+    }
     try {
       if(item.ref.gcalId){
         const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${item.ref.gcalId}`, {
@@ -3615,7 +3654,7 @@ function renderBudgetTransactions() {
         <div><label class="field-label">${t('budget_description')}</label><input class="input-field" id="tx-desc" placeholder=""></div>
         <div style="display:flex;align-items:flex-end;">
           <label style="display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:13px;cursor:pointer;padding-bottom:10px;">
-            <input type="checkbox" id="tx-recurring" style="width:16px;height:16px;">
+            <input type="checkbox" id="tx-recurring" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;">
             🔁 Repeat monthly
           </label>
         </div>
@@ -3738,7 +3777,7 @@ function editTransaction(id) {
   if (!tx) return;
   txEditId = id;
   document.getElementById('tx-form-title').textContent = 'Edit Transaction';
-  document.getElementById('tx-add-label').textContent = t('common_update') || 'Update';
+  document.getElementById('tx-add-label').textContent = 'Update';
   document.getElementById('tx-cancel-edit').classList.remove('hidden');
   document.getElementById('tx-date').value = tx.date;
   document.getElementById('tx-amount').value = tx.amount;
@@ -6792,15 +6831,31 @@ function openCalDayPanel(ds) {
 }
 
 function openImportantDatesModal() {
-  const renderList = () => `<div id="imp-dates-list">${(DATA.importantDates || []).map(d => `<div class="imp-date-row" data-id="${d.id}"><span class="nm">${p4esc(d.name)}</span><span class="dt">${d.date}</span><button class="del-btn" data-id="${d.id}">${icon('trash',14)}</button></div>`).join('') || `<div class="chart-empty">${t('common_no_data')}</div>`}</div>`;
+  const renderList = () => `<div id="imp-dates-list">${(DATA.importantDates || []).map(d => `<div class="imp-date-row" data-id="${d.id}"><span class="nm">${d.time ? '📞 ' : ''}${p4esc(d.name)}</span><span class="dt">${d.date}${d.time ? ' · ' + d.time : ''}</span><button class="del-btn" data-id="${d.id}">${icon('trash',14)}</button></div>`).join('') || `<div class="chart-empty">${t('common_no_data')}</div>`}</div>`;
   openModal(`<div class="modal-box lg">
     <h3>${t('cal_important_dates')}</h3>
     <div class="modal-form">
       <div class="modal-row-2">
-        <div class="field-mini"><label>${t('cal_event_name')}</label><input type="text" id="imp-name"></div>
+        <div class="field-mini"><label>${t('cal_event_name')}</label><input type="text" id="imp-name" placeholder="e.g. Dr. Smith Checkup"></div>
         <div class="field-mini"><label>${t('cal_event_date')}</label><input type="date" id="imp-date"></div>
       </div>
-      <button class="btn-primary" id="imp-add-btn" style="margin-top:8px;">+ ${t('cal_add_event')}</button>
+      <label style="display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:13px;cursor:pointer;margin-top:10px;">
+        <input type="checkbox" id="imp-is-appt" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;">
+        This is an appointment (add contact & location details)
+      </label>
+      <div id="imp-appt-fields" class="hidden" style="margin-top:10px;">
+        <div class="modal-row-2">
+          <div class="field-mini"><label>Time</label><input type="time" id="imp-time"></div>
+          <div class="field-mini"><label>Contact Person</label><input type="text" id="imp-contact" placeholder="e.g. Dr. Smith"></div>
+        </div>
+        <div class="modal-row-2" style="margin-top:8px;">
+          <div class="field-mini"><label>Phone Number</label><input type="text" id="imp-phone" placeholder="(555) 555-5555"></div>
+          <div class="field-mini"><label>Video/Zoom Link</label><input type="text" id="imp-video" placeholder="https://..."></div>
+        </div>
+        <div class="field-mini" style="margin-top:8px;"><label>Address / Location</label><input type="text" id="imp-location" placeholder="123 Main St, City, WA"></div>
+        <div class="field-mini" style="margin-top:8px;"><label>Notes</label><input type="text" id="imp-notes" placeholder="Anything else worth remembering"></div>
+      </div>
+      <button class="btn-primary" id="imp-add-btn" style="margin-top:14px;">+ ${t('cal_add_event')}</button>
       <div style="margin-top:14px;">${renderList()}</div>
     </div>
     <div class="modal-actions"><button class="btn-primary" id="imp-close">${t('common_close')}</button></div>
@@ -6815,11 +6870,30 @@ function openImportantDatesModal() {
     }));
   };
   rebind();
+  document.getElementById('imp-is-appt').addEventListener('change', e => {
+    document.getElementById('imp-appt-fields').classList.toggle('hidden', !e.target.checked);
+  });
   document.getElementById('imp-add-btn').addEventListener('click', () => {
     const name = document.getElementById('imp-name').value.trim();
     const date = document.getElementById('imp-date').value;
     if (!name || !date) return;
-    DATA.importantDates.push({ id: p4uid(), name, date });
+    const isAppt = document.getElementById('imp-is-appt').checked;
+    const entry = { id: p4uid(), name, date };
+    if (isAppt) {
+      const time = document.getElementById('imp-time').value;
+      const contact = document.getElementById('imp-contact').value.trim();
+      const phone = document.getElementById('imp-phone').value.trim();
+      const video = document.getElementById('imp-video').value.trim();
+      const location = document.getElementById('imp-location').value.trim();
+      const notes = document.getElementById('imp-notes').value.trim();
+      if (time) entry.time = time;
+      if (contact) entry.contact = contact;
+      if (phone) entry.phone = phone;
+      if (video) entry.video = video;
+      if (location) entry.location = location;
+      if (notes) entry.notes = notes;
+    }
+    DATA.importantDates.push(entry);
     document.getElementById('imp-name').value = '';
     saveData();
     closeModal(); openImportantDatesModal();
