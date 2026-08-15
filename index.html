@@ -1042,6 +1042,8 @@ body.sidebar-collapsed #main-content { margin-left: var(--sidebar-collapsed); }
 .field-mini { display:flex; flex-direction:column; gap:4px; min-width:0; }
 .field-mini label { font-size:11px; text-transform:uppercase; color:var(--text-muted); font-weight:600; letter-spacing:0.4px; }
 .field-mini input, .field-mini select, .field-mini textarea { padding:8px 10px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:8px; color:var(--text-primary); font-size:13px; font-family:inherit; width:100%; max-width:100%; box-sizing:border-box; }
+.field-mini input[type="date"] { padding-right:28px; }
+.field-mini input[type="date"]::-webkit-calendar-picker-indicator { position:relative; cursor:pointer; }
 .field-mini input:focus, .field-mini select:focus, .field-mini textarea:focus { outline:none; border-color:var(--accent); }
 .field-mini textarea { resize:vertical; min-height:60px; }
 
@@ -2419,10 +2421,10 @@ const DEFAULT_DATA = {
     {id:'education',name:'Education',budget:0,color:'#6366F1',icon:'book',type:'expense'},
     {id:'savings',name:'Savings',budget:0,color:'#0EA5E9',icon:'piggy-bank',type:'expense'},
     {id:'other',name:'Other',budget:0,color:'#64748B',icon:'more',type:'expense'},
-    {id:'salary',name:'Salary',budget:0,color:'#22C55E',icon:'more',type:'income'},
-    {id:'freelance',name:'Freelance / Business',budget:0,color:'#0EA5E9',icon:'more',type:'income'},
+    {id:'salary',name:'Job / Salary',budget:0,color:'#22C55E',icon:'more',type:'income'},
+    {id:'freelance',name:'Side Hustle / Freelance',budget:0,color:'#0EA5E9',icon:'more',type:'income'},
     {id:'investments',name:'Investments',budget:0,color:'#8B5CF6',icon:'more',type:'income'},
-    {id:'gifts',name:'Gifts',budget:0,color:'#EC4899',icon:'more',type:'income'},
+    {id:'benefits',name:'Benefits',budget:0,color:'#EC4899',icon:'more',type:'income'},
     {id:'other_income',name:'Other Income',budget:0,color:'#64748B',icon:'more',type:'income'}
   ]},
   transactions:[],
@@ -9697,6 +9699,23 @@ function ensurePart8Defaults() {
   if (!Array.isArray(DATA.knowledge.entries)) DATA.knowledge.entries = [];
   if (typeof DATA.knowledge.monthlyGoal !== 'number') DATA.knowledge.monthlyGoal = 20;
   if (typeof DATA.knowledge.bestStreak !== 'number') DATA.knowledge.bestStreak = 0;
+  // Migration: backfill category "type" field + missing default income categories for existing users
+  if (DATA.budget && Array.isArray(DATA.budget.categories)) {
+    DATA.budget.categories.forEach(c => { if (!c.type) c.type = 'expense'; });
+    const hasIncomeCat = DATA.budget.categories.some(c => c.type === 'income');
+    if (!hasIncomeCat) {
+      const defaultIncome = [
+        {id:'salary',name:'Job / Salary',budget:0,color:'#22C55E',icon:'more',type:'income'},
+        {id:'freelance',name:'Side Hustle / Freelance',budget:0,color:'#0EA5E9',icon:'more',type:'income'},
+        {id:'investments',name:'Investments',budget:0,color:'#8B5CF6',icon:'more',type:'income'},
+        {id:'benefits',name:'Benefits',budget:0,color:'#EC4899',icon:'more',type:'income'},
+        {id:'other_income',name:'Other Income',budget:0,color:'#64748B',icon:'more',type:'income'}
+      ];
+      defaultIncome.forEach(inc => {
+        if (!DATA.budget.categories.some(c => c.id === inc.id)) DATA.budget.categories.push(inc);
+      });
+    }
+  }
 }
 
 /* ---------- helpers ---------- */
