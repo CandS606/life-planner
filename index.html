@@ -3671,7 +3671,7 @@ function renderBudgetTransactions() {
         </div>
         <div><label class="field-label">${t('budget_subcategory')}</label><input class="input-field" id="tx-sub" placeholder=""></div>
         <div><label class="field-label">${t('budget_description')}</label><input class="input-field" id="tx-desc" placeholder=""></div>
-        <div><label class="field-label">Paid From</label><input class="input-field" id="tx-paidfrom" list="tx-paidfrom-list" placeholder="Checking, Visa...">${paidFromDatalist('tx-paidfrom-list')}</div>
+        <div><label class="field-label" id="tx-paidfrom-label">${txAddType==='income'?'Paid To':'Paid From'}</label><input class="input-field" id="tx-paidfrom" list="tx-paidfrom-list" placeholder="Checking, Visa...">${paidFromDatalist('tx-paidfrom-list')}</div>
         <div style="display:flex;align-items:flex-end;">
           <label style="display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:13px;cursor:pointer;padding-bottom:10px;">
             <input type="checkbox" id="tx-recurring" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;">
@@ -3733,6 +3733,16 @@ function renderBudgetTransactions() {
       if (tx) {
         tx.date = date; tx.amount = amount; tx.categoryId = categoryId;
         tx.subcategory = sub; tx.description = desc; tx.type = txAddType; tx.paidFrom = paidFrom;
+        if (recurring && !tx.recurringId) {
+          // newly marked recurring: create a template starting from this transaction
+          const day = new Date(date + 'T00:00:00').getDate();
+          const recId = uid();
+          DATA.recurringTransactions.push({ id: recId, day, amount, categoryId, subcategory: sub, description: desc, type: txAddType, paidFrom });
+          tx.recurringId = recId;
+        } else if (!recurring && tx.recurringId) {
+          // unchecked: detach this specific transaction from the series (series itself keeps generating for other months)
+          delete tx.recurringId;
+        }
       }
       resetTxForm();
     } else {
@@ -3780,6 +3790,8 @@ function setTxType(which) {
   if (catSelect) {
     catSelect.innerHTML = categoriesForType(which).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
   }
+  const paidFromLabel = document.getElementById('tx-paidfrom-label');
+  if (paidFromLabel) paidFromLabel.textContent = which === 'income' ? 'Paid To' : 'Paid From';
 }
 
 function resetTxForm() {
@@ -3815,7 +3827,7 @@ function editTransaction(id) {
   document.getElementById('tx-paidfrom').value = tx.paidFrom || '';
   const recurringChk = document.getElementById('tx-recurring');
   recurringChk.checked = !!tx.recurringId;
-  recurringChk.disabled = true; // recurring status set at creation only, keep simple
+  recurringChk.disabled = false;
   document.getElementById('tx-form-title').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 function generateRecurringTransactions() {
@@ -3921,14 +3933,14 @@ function drawTxTable() {
         <th>${t('budget_category')}</th>
         <th>${t('budget_subcategory')}</th>
         <th>${t('budget_description')}</th>
-        <th>Paid From</th>
+        <th>Account</th>
         <th>${t('budget_type')}</th>
         <th></th>
       </tr></thead>
       <tbody>
         ${slice.map(tx => {
           const c = catMap[tx.categoryId] || { name: '—', color: '#64748B' };
-          const dateStr = new Date(tx.date).toLocaleDateString(locale, { year:'2-digit', month:'short', day:'numeric' });
+          const dateStr = new Date(tx.date + 'T00:00:00').toLocaleDateString(locale, { year:'2-digit', month:'short', day:'numeric' });
           const colorAmt = tx.type === 'income' ? '#22C55E' : '#EF4444';
           const sign = tx.type === 'income' ? '+' : '-';
           return `<tr data-id="${tx.id}">
@@ -6930,7 +6942,7 @@ function renderCalendar() {
   drawCalendarBody();
 }
 
-function startOfWeek(d) { const x = new Date(d); const dow = (x.getDay() + 6) % 7; x.setDate(x.getDate() - dow); x.setHours(0,0,0,0); return x; }
+function startOfWeek(d) { const x = new Date(d); const dow = x.getDay(); x.setDate(x.getDate() - dow); x.setHours(0,0,0,0); return x; }
 
 function collectDayEvents(ds) {
   const events = [];
@@ -6990,9 +7002,9 @@ function eventDetailRows(evt) {
 }
 
 function openEventDetailModal(evt) {
-  const dateLabel = evt.ref && evt.ref.date ? new Date(evt.ref.date).toLocaleDateString(p4localeStr(), { weekday:'long', month:'long', day:'numeric', year:'numeric' })
-    : (evt.ref && evt.ref.due ? new Date(evt.ref.due).toLocaleDateString(p4localeStr(), { weekday:'long', month:'long', day:'numeric', year:'numeric' })
-    : (evt.ref && evt.ref.nextRenewal ? new Date(evt.ref.nextRenewal).toLocaleDateString(p4localeStr(), { weekday:'long', month:'long', day:'numeric', year:'numeric' }) : ''));
+  const dateLabel = evt.ref && evt.ref.date ? new Date(evt.ref.date + 'T00:00:00').toLocaleDateString(p4localeStr(), { weekday:'long', month:'long', day:'numeric', year:'numeric' })
+    : (evt.ref && evt.ref.due ? new Date(evt.ref.due + 'T00:00:00').toLocaleDateString(p4localeStr(), { weekday:'long', month:'long', day:'numeric', year:'numeric' })
+    : (evt.ref && evt.ref.nextRenewal ? new Date(evt.ref.nextRenewal + 'T00:00:00').toLocaleDateString(p4localeStr(), { weekday:'long', month:'long', day:'numeric', year:'numeric' }) : ''));
   const rows = eventDetailRows(evt);
   openModal(`<div class="modal-box">
     <div style="display:flex;align-items:flex-start;gap:10px;">
@@ -7023,11 +7035,11 @@ function drawCalendarMonth() {
   const body = document.getElementById('cal-body');
   document.getElementById('cal-month-label').textContent = `${p4monthName(calViewYear, calViewMonth)} ${calViewYear}`;
   const daysIn = p4daysInMonth(calViewYear, calViewMonth);
-  const firstDow = (new Date(calViewYear, calViewMonth, 1).getDay() + 6) % 7; // Mon-first
+  const firstDow = new Date(calViewYear, calViewMonth, 1).getDay(); // Sun-first (0=Sun)
   const todayS = todayStr();
   const dowLocale = [];
   for (let i = 0; i < 7; i++) {
-    const d = new Date(2024, 0, 1 + i); // 2024-01-01 was Mon
+    const d = new Date(2024, 0, 7 + i); // 2024-01-07 was Sun
     dowLocale.push(d.toLocaleDateString(p4localeStr(), { weekday: 'short' }));
   }
   let html = '<div class="cal-month-grid">';
@@ -7096,7 +7108,7 @@ function drawCalendarWeek() {
 function openCalDayPanel(ds) {
   const evts = collectDayEvents(ds);
   const panel = document.getElementById('cal-day-panel');
-  const dt = new Date(ds);
+  const dt = new Date(ds + 'T00:00:00');
   document.getElementById('cal-panel-title').textContent = dt.toLocaleDateString(p4localeStr(), { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
   // group by type
   const groups = { task: [], bill: [], habit: [], event: [], imp: [], nospend: [], imported: [] };
@@ -7122,7 +7134,7 @@ function openCalDayPanel(ds) {
   });
   if (tbActive.length) {
     body += `<div class="panel-section"><h4>${t('time_title')}</h4>` +
-      tbActive.map(([s, v]) => `<div class="panel-item"><span style="font-family:'JetBrains Mono';color:var(--text-muted);font-size:12px;">${s}</span><span>${p4esc(v.activity)}</span></div>`).join('') +
+      tbActive.map(([s, v]) => `<div class="panel-item"><span style="font-family:'JetBrains Mono';color:var(--text-muted);font-size:12px;">${to12h(s)}</span><span>${p4esc(v.activity)}</span></div>`).join('') +
       `</div>`;
   }
   if (!body) body = `<div class="panel-empty">${t('common_no_data')}</div>`;
@@ -7309,7 +7321,7 @@ function drawFitnessContent() {
   grid.innerHTML = dates.map(ds => {
     if (!DATA.fitness[ds]) DATA.fitness[ds] = { restDay: false, muscleGroups: [], exercises: [], cardio: [] };
     const day = DATA.fitness[ds];
-    const dt = new Date(ds);
+    const dt = new Date(ds + 'T00:00:00');
     const isToday = ds === today;
     const dayName = dt.toLocaleDateString(p5locale(), { weekday: 'short' });
     const dayNum = dt.toLocaleDateString(p5locale(), { day: 'numeric', month: 'short' });
@@ -7533,7 +7545,7 @@ function renderMealsPlan() {
     </div>
     <div class="meal-grid-wrap">
       <table class="meal-grid">
-        <thead><tr><th class="row-h"></th>${dates.map(d => `<th class="${d===today?'today-col':''}">${new Date(d).toLocaleDateString(p5locale(),{weekday:'short'})}<br><small style="font-family:'JetBrains Mono';font-size:10px;color:var(--text-muted);">${new Date(d).getDate()}</small></th>`).join('')}</tr></thead>
+        <thead><tr><th class="row-h"></th>${dates.map(d => `<th class="${d===today?'today-col':''}">${new Date(d+'T00:00:00').toLocaleDateString(p5locale(),{weekday:'short'})}<br><small style="font-family:'JetBrains Mono';font-size:10px;color:var(--text-muted);">${new Date(d+'T00:00:00').getDate()}</small></th>`).join('')}</tr></thead>
         <tbody>
           ${MEAL_TYPES.map(mt => `<tr>
             <td class="meal-h">${mt.emoji} ${t(mt.key)}</td>
@@ -8055,12 +8067,12 @@ function drawChoresContent() {
       done += list.filter(c => c.done).length;
     });
     const pct = total ? (done/total)*100 : 0;
-    return `<div class="chores-day-prog"><div class="name">${new Date(ds).toLocaleDateString(p5locale(),{weekday:'short'})}</div><div class="val">${done}/${total}</div><div class="bar"><span style="width:${pct}%"></span></div></div>`;
+    return `<div class="chores-day-prog"><div class="name">${new Date(ds+'T00:00:00').toLocaleDateString(p5locale(),{weekday:'short'})}</div><div class="val">${done}/${total}</div><div class="bar"><span style="width:${pct}%"></span></div></div>`;
   }).join('');
   document.getElementById('ch-daily-bar').innerHTML = dailyBar;
   // grid
   let html = '<table class="chores-grid"><thead><tr><th class="member-h">${t(\'chores_members\')}</th>'.replace('${t(\'chores_members\')}', t('chores_members')) +
-    dates.map(ds => `<th class="${ds===today?'today-col':''}">${new Date(ds).toLocaleDateString(p5locale(),{weekday:'short'})}<br><small style="font-family:'JetBrains Mono';font-size:10px;color:var(--text-muted);">${new Date(ds).getDate()}</small></th>`).join('') +
+    dates.map(ds => `<th class="${ds===today?'today-col':''}">${new Date(ds+'T00:00:00').toLocaleDateString(p5locale(),{weekday:'short'})}<br><small style="font-family:'JetBrains Mono';font-size:10px;color:var(--text-muted);">${new Date(ds+'T00:00:00').getDate()}</small></th>`).join('') +
     `<th>${t('chores_achievement')}</th></tr></thead><tbody>`;
   members.forEach(m => {
     let done = 0, total = 0;
