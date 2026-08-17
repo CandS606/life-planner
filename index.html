@@ -3529,7 +3529,7 @@ function renderBalanceLine(){
    MODAL
    ========================================================= */
 const overlay=document.getElementById('modal-overlay');
-function openModal(html){ overlay.innerHTML=`<div class="modal-box">${html}</div>`; overlay.classList.remove('hidden'); }
+function openModal(html){ overlay.innerHTML=html; overlay.classList.remove('hidden'); }
 function closeModal(){ overlay.classList.add('hidden'); overlay.innerHTML=''; }
 overlay.addEventListener('click',e=>{ if(e.target===overlay) closeModal(); });
 
