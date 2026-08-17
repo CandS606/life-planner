@@ -788,7 +788,17 @@ body.sidebar-collapsed #main-content { margin-left: var(--sidebar-collapsed); }
 .empty-state .ic { color: var(--accent); margin-bottom: 10px; display: inline-block; opacity: 0.5; }
 
 /* modal form */
-.modal-box.lg { width: 672px; max-width: 95vw; min-width: 340px; resize: horizontal; overflow: auto; }
+.modal-box.lg { width: 672px; max-width: 95vw; min-width: 340px; overflow: auto; position: relative; }
+.modal-resize-grip {
+  position: absolute; top: 50%; right: -14px; transform: translateY(-50%);
+  width: 24px; height: 64px; border-radius: 12px;
+  background: var(--accent); opacity: 0.5;
+  cursor: ew-resize; display: flex; align-items: center; justify-content: center;
+  gap: 3px; z-index: 10; transition: opacity 0.15s;
+  touch-action: none;
+}
+.modal-resize-grip:hover, .modal-resize-grip.dragging { opacity: 0.9; }
+.modal-resize-grip span { width: 3px; height: 28px; border-radius: 2px; background: #fff; }
 .modal-form { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 14px; min-width: 0; }
 .modal-form .form-row { gap: 12px; }
 .toggle-row { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
@@ -3529,9 +3539,52 @@ function renderBalanceLine(){
    MODAL
    ========================================================= */
 const overlay=document.getElementById('modal-overlay');
-function openModal(html){ overlay.innerHTML=html; overlay.classList.remove('hidden'); }
+function openModal(html){ overlay.innerHTML=html; overlay.classList.remove('hidden'); attachModalResizeGrip(); }
 function closeModal(){ overlay.classList.add('hidden'); overlay.innerHTML=''; }
-overlay.addEventListener('click',e=>{ if(e.target===overlay) closeModal(); });
+let overlayMouseDownOnSelf = false;
+overlay.addEventListener('mousedown', e => { overlayMouseDownOnSelf = (e.target === overlay); });
+overlay.addEventListener('click', e => { if (e.target === overlay && overlayMouseDownOnSelf) closeModal(); });
+function attachModalResizeGrip(){
+  const box = overlay.querySelector('.modal-box.lg');
+  if (!box) return;
+  const grip = document.createElement('div');
+  grip.className = 'modal-resize-grip';
+  grip.innerHTML = '<span></span><span></span>';
+  box.appendChild(grip);
+  let startX = 0, startWidth = 0, dragging = false;
+  const minW = 340;
+  const maxW = () => Math.round(window.innerWidth * 0.95);
+  function onMove(e){
+    if (!dragging) return;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const delta = clientX - startX;
+    let newWidth = Math.max(minW, Math.min(maxW(), startWidth + delta));
+    box.style.width = newWidth + 'px';
+  }
+  function onUp(){
+    dragging = false;
+    grip.classList.remove('dragging');
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onUp);
+    document.body.style.userSelect = '';
+  }
+  function onDown(e){
+    e.preventDefault(); e.stopPropagation();
+    dragging = true;
+    grip.classList.add('dragging');
+    startX = e.touches ? e.touches[0].clientX : e.clientX;
+    startWidth = box.getBoundingClientRect().width;
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onUp);
+  }
+  grip.addEventListener('mousedown', onDown);
+  grip.addEventListener('touchstart', onDown, { passive: false });
+}
 
 function confirmReset(){
   const word=t('settings_reset_word');
