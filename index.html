@@ -5238,7 +5238,7 @@ function renderDebt() {
     sec.innerHTML = buildDebtSectionHTML();
     sec.dataset.built = '1';
     document.getElementById('debt-add-row').addEventListener('click', () => {
-      DATA.debts.push({ id: p3uid(), name: t('debt_name'), balance: 0, rate: 0, min: 0, dueDate: 1 });
+      DATA.debts.push({ id: p3uid(), name: '', balance: 0, rate: 0, min: 0, dueDate: 1 });
       saveData(); drawDebtRows(); drawDebtOverview();
     });
     document.getElementById('debt-start').addEventListener('change', e => { DATA.debtSettings.startDate = e.target.value; saveData(); drawDebtOverview(); });
@@ -5267,7 +5267,7 @@ function drawDebtRows() {
     return;
   }
   tbody.innerHTML = DATA.debts.map(d => `<tr data-id="${d.id}">
-    <td><input type="text" data-f="name" value="${p3esc(d.name)}"></td>
+    <td><input type="text" data-f="name" placeholder="${t('debt_name')}" value="${p3esc(d.name)}"></td>
     <td><input type="number" data-f="balance" value="${d.balance||0}" min="0" step="0.01"></td>
     <td><input type="number" data-f="rate" value="${d.rate||0}" min="0" step="0.01"></td>
     <td><input type="number" data-f="min" value="${d.min||0}" min="0" step="0.01"></td>
