@@ -790,15 +790,15 @@ body.sidebar-collapsed #main-content { margin-left: var(--sidebar-collapsed); }
 /* modal form */
 .modal-box.lg { width: 672px; max-width: 95vw; min-width: 340px; overflow: auto; position: relative; }
 .modal-resize-grip {
-  position: absolute; top: 50%; right: -14px; transform: translateY(-50%);
-  width: 24px; height: 64px; border-radius: 12px;
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  width: 16px; height: 64px; border-radius: 10px;
   background: var(--accent); opacity: 0.5;
   cursor: ew-resize; display: flex; align-items: center; justify-content: center;
-  gap: 3px; z-index: 10; transition: opacity 0.15s;
+  gap: 3px; z-index: 20; transition: opacity 0.15s;
   touch-action: none;
 }
 .modal-resize-grip:hover, .modal-resize-grip.dragging { opacity: 0.9; }
-.modal-resize-grip span { width: 3px; height: 28px; border-radius: 2px; background: #fff; }
+.modal-resize-grip span { width: 2.5px; height: 26px; border-radius: 2px; background: #fff; }
 .modal-form { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 14px; min-width: 0; }
 .modal-form .form-row { gap: 12px; }
 .toggle-row { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
