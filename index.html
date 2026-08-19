@@ -319,6 +319,15 @@ body.sidebar-collapsed #main-content { margin-left: var(--sidebar-collapsed); }
 }
 .welcome-bar h2 { font-size: var(--text-2xl); font-weight: 700; }
 .welcome-bar .date { color: var(--text-secondary); font-size: var(--text-sm); margin-top: 4px; }
+.dash-weather {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: var(--card-radius); padding: 10px 16px;
+  font-size: var(--text-sm); color: var(--text-secondary); min-height: 20px;
+}
+.dash-weather .dw-emoji { font-size: 22px; line-height: 1; }
+.dash-weather .dw-temp { font-size: var(--text-lg); font-weight: 700; color: var(--text-primary); }
+.dash-weather .dw-place { font-size: var(--text-xs); color: var(--text-muted); }
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
 .stat-card {
   background: var(--bg-secondary); border: 1px solid var(--border);
@@ -327,6 +336,7 @@ body.sidebar-collapsed #main-content { margin-left: var(--sidebar-collapsed); }
   transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.3s, border-color 0.3s;
 }
 .stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 32px var(--shadow); }
+.stat-card-clickable:hover { border-color: var(--accent); }
 .stat-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .stat-ico {
   width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
@@ -2207,10 +2217,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
           <button class="dd-toggle" id="lang-toggle"><span id="lang-ico"></span><span id="lang-cur">EN</span></button>
           <div class="dd-menu" id="lang-menu"></div>
         </div>
-        <div class="dd-wrap">
-          <button class="dd-toggle" id="cur-toggle"><span id="cur-sym">$</span></button>
-          <div class="dd-menu" id="cur-menu"></div>
-        </div>
         <div class="theme-switch" id="theme-switch" title="Toggle theme">
           <div class="knob" id="theme-knob"></div>
         </div>
@@ -2225,6 +2231,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
             <h2 id="greeting">Welcome back</h2>
             <div class="date" id="today-date"></div>
           </div>
+          <div id="dash-weather" class="dash-weather"></div>
           <button class="btn-primary" id="dash-quick-add"><span id="qa-plus-ico"></span><span id="qa-add-label">Add Expense</span></button>
         </div>
 
@@ -2274,11 +2281,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
         <div class="card set-group">
           <div class="card-title" id="set-lang-t">Language</div>
           <div class="pill-row" id="lang-pills" style="margin-top:14px;"></div>
-        </div>
-        <!-- Currency -->
-        <div class="card set-group">
-          <div class="card-title" id="set-cur-t">Currency</div>
-          <div class="pill-row" id="cur-pills" style="margin-top:14px;"></div>
         </div>
         <!-- Data -->
         <div class="card set-group">
@@ -3213,7 +3215,7 @@ function applyLang(){
   applyTheme();
 }
 function setLang(l){ state.lang=l; DATA.settings.language=l; saveData(); applyLang(); buildLangMenu(); buildLangPills(); ['section-budget','section-subscriptions','section-savings','section-debt','section-goals','section-tasks','section-habits','section-noSpend','section-timeBlock','section-calendar','section-hydration','section-weight','section-chores','section-notes','section-reference','section-sleep','section-mindfulness','section-investments','section-knowledge'].forEach(id=>{const e=document.getElementById(id);if(e)delete e.dataset.built;}); renderDashboard(); if(state.section==='budget')renderBudget(); if(state.section==='subscriptions')renderSubscriptions(); if(state.section==='savings')renderSavings(); if(state.section==='debt')renderDebt(); if(state.section==='goals')renderGoalTracker(); if(state.section==='tasks')renderTasks(); if(state.section==='habits')renderHabits(); if(state.section==='noSpend')renderNoSpend(); if(state.section==='timeBlock')renderTimeBlock(); if(state.section==='calendar')renderCalendar(); if(state.section==='hydration')renderHydration(); if(state.section==='weight')renderWeight(); if(state.section==='chores')renderChores(); if(state.section==='notes')renderNotes(); if(state.section==='reference')renderReference(); if(state.section==='sleep')renderSleep(); if(state.section==='mindfulness')renderMindfulness(); if(state.section==='investments')renderInvestments(); if(state.section==='knowledge')renderKnowledge(); }
-function applyCurrency(){ document.getElementById('cur-sym').textContent = CURRENCIES[state.currency].symbol; }
+function applyCurrency(){ const el = document.getElementById('cur-sym'); if (el) el.textContent = CURRENCIES[state.currency].symbol; }
 function setCurrency(c){ state.currency=c; DATA.settings.currency=c; saveData(); applyCurrency(); buildCurMenu(); buildCurPills(); renderDashboard(); if(state.section==='budget')renderBudget(); if(state.section==='subscriptions')renderSubscriptions(); if(state.section==='savings')renderSavings(); if(state.section==='debt')renderDebt(); if(state.section==='tasks')renderTasks(); if(state.section==='noSpend')renderNoSpend(); if(state.section==='investments')renderInvestments(); }
 
 /* ---------- DROPDOWNS / PILLS ---------- */
@@ -3224,7 +3226,9 @@ function buildLangMenu(){
   document.querySelectorAll('#lang-menu .dd-opt').forEach(el=>el.addEventListener('click',()=>{setLang(el.dataset.l); closeDD();}));
 }
 function buildCurMenu(){
-  document.getElementById('cur-menu').innerHTML = CUR_OPTS.map(o=>`<div class="dd-opt ${o.c===state.currency?'sel':''}" data-c="${o.c}"><span style="width:18px;display:inline-block;">${o.s}</span> ${o.n}</div>`).join('');
+  const host = document.getElementById('cur-menu');
+  if (!host) return;
+  host.innerHTML = CUR_OPTS.map(o=>`<div class="dd-opt ${o.c===state.currency?'sel':''}" data-c="${o.c}"><span style="width:18px;display:inline-block;">${o.s}</span> ${o.n}</div>`).join('');
   document.querySelectorAll('#cur-menu .dd-opt').forEach(el=>el.addEventListener('click',()=>{setCurrency(el.dataset.c); closeDD();}));
 }
 function buildLangPills(){
@@ -3232,7 +3236,9 @@ function buildLangPills(){
   document.querySelectorAll('#lang-pills .pill').forEach(el=>el.addEventListener('click',()=>setLang(el.dataset.l)));
 }
 function buildCurPills(){
-  document.getElementById('cur-pills').innerHTML = CUR_OPTS.map(o=>`<div class="pill ${o.c===state.currency?'active':''}" data-c="${o.c}">${o.s} ${o.n}</div>`).join('');
+  const host = document.getElementById('cur-pills');
+  if (!host) return;
+  host.innerHTML = CUR_OPTS.map(o=>`<div class="pill ${o.c===state.currency?'active':''}" data-c="${o.c}">${o.s} ${o.n}</div>`).join('');
   document.querySelectorAll('#cur-pills .pill').forEach(el=>el.addEventListener('click',()=>setCurrency(el.dataset.c)));
 }
 function closeDD(){ document.querySelectorAll('.dd-menu').forEach(m=>m.classList.remove('open')); }
@@ -3425,7 +3431,8 @@ function computeHabitStreak(){
 }
 
 function statCard(opts){
-  return `<div class="stat-card">
+  const clickable = !!opts.nav;
+  return `<div class="stat-card${clickable?' stat-card-clickable':''}"${clickable?` data-nav="${opts.nav}"`:''}${opts.navArg?` data-nav-arg="${opts.navArg}"`:''}>
     <div class="stat-head">
       <div class="stat-ico" style="background:${opts.bg};color:${opts.color}">${opts.iconHtml||icon(opts.icon)}</div>
       <div><div class="stat-label">${opts.label}</div></div>
@@ -3437,6 +3444,59 @@ function statCard(opts){
 }
 function rgba(hex,a){ const h=hex.replace('#',''); const r=parseInt(h.substr(0,2),16),g=parseInt(h.substr(2,2),16),b=parseInt(h.substr(4,2),16); return `rgba(${r},${g},${b},${a})`; }
 
+/* =========================================================
+   WEATHER WIDGET (Seattle, hourly refresh, cached in localStorage)
+   ========================================================= */
+const WEATHER_CACHE_KEY = 'niboflow_weather_cache_v1';
+const WEATHER_LAT = 47.6062, WEATHER_LON = -122.3321, WEATHER_PLACE = 'Seattle, WA';
+function weatherCodeInfo(code){
+  const map = {
+    0:['☀️','Clear'],1:['🌤️','Mostly Clear'],2:['⛅','Partly Cloudy'],3:['☁️','Overcast'],
+    45:['🌫️','Fog'],48:['🌫️','Fog'],
+    51:['🌦️','Light Drizzle'],53:['🌦️','Drizzle'],55:['🌦️','Heavy Drizzle'],
+    56:['🌧️','Freezing Drizzle'],57:['🌧️','Freezing Drizzle'],
+    61:['🌧️','Light Rain'],63:['🌧️','Rain'],65:['🌧️','Heavy Rain'],
+    66:['🌨️','Freezing Rain'],67:['🌨️','Freezing Rain'],
+    71:['🌨️','Light Snow'],73:['🌨️','Snow'],75:['❄️','Heavy Snow'],77:['❄️','Snow Grains'],
+    80:['🌦️','Rain Showers'],81:['🌧️','Rain Showers'],82:['⛈️','Heavy Showers'],
+    85:['🌨️','Snow Showers'],86:['❄️','Snow Showers'],
+    95:['⛈️','Thunderstorm'],96:['⛈️','Thunderstorm'],99:['⛈️','Severe Thunderstorm']
+  };
+  return map[code] || ['🌡️','—'];
+}
+function renderWeatherWidget(){
+  const host = document.getElementById('dash-weather');
+  if (!host) return;
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(WEATHER_CACHE_KEY) || 'null'); } catch(e){}
+  const isStale = !cached || (Date.now() - cached.fetchedAt) > 3600000; // 1 hour
+  if (cached) drawWeatherWidget(cached);
+  else host.innerHTML = `<span class="dw-place">Loading weather…</span>`;
+  if (isStale) fetchWeatherNow();
+}
+async function fetchWeatherNow(){
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${WEATHER_LAT}&longitude=${WEATHER_LON}&current_weather=true&temperature_unit=fahrenheit`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('weather fetch failed');
+    const data = await res.json();
+    const cw = data.current_weather;
+    if (!cw) throw new Error('no current_weather in response');
+    const payload = { temp: Math.round(cw.temperature), code: cw.weathercode, fetchedAt: Date.now() };
+    localStorage.setItem(WEATHER_CACHE_KEY, JSON.stringify(payload));
+    if (state.section === 'dashboard') drawWeatherWidget(payload);
+  } catch(e) {
+    const host = document.getElementById('dash-weather');
+    if (host && !host.querySelector('.dw-temp')) host.innerHTML = `<span class="dw-place">Weather unavailable</span>`;
+  }
+}
+function drawWeatherWidget(data){
+  const host = document.getElementById('dash-weather');
+  if (!host) return;
+  const [emoji, desc] = weatherCodeInfo(data.code);
+  host.innerHTML = `<span class="dw-emoji">${emoji}</span><div><div class="dw-temp">${data.temp}°F</div><div class="dw-place">${desc} · ${WEATHER_PLACE}</div></div>`;
+}
+
 function renderDashboard(){
   const s=computeStats();
   // greeting
@@ -3445,27 +3505,37 @@ function renderDashboard(){
   document.getElementById('greeting').textContent=t(gk);
   const locale={en:'en-US',fr:'fr-FR',es:'es-ES',ar:'ar-MA'}[state.lang]||'en-US';
   document.getElementById('today-date').textContent=new Date().toLocaleDateString(locale,{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+  renderWeatherWidget();
 
   const G='#22C55E',R='#EF4444';
   const grid=document.getElementById('stat-grid');
   grid.innerHTML=
     statCard({icon:'dollar-sign',bg:rgba('#14B8A6',0.15),color:'#14B8A6',label:t('dash_budget_summary'),
-      value:formatMoney(s.income),meta:`${t('dash_expenses')}: ${formatMoney(s.expenses)}`,bar:s.budgetUsedPct,barColor:s.remaining<0?R:G})+
+      value:formatMoney(s.income),meta:`${t('dash_expenses')}: ${formatMoney(s.expenses)}`,bar:s.budgetUsedPct,barColor:s.remaining<0?R:G,nav:'budget'})+
     statCard({icon:'target',bg:rgba('#F59E0B',0.15),color:'#F59E0B',label:t('dash_savings_progress'),
-      value:formatMoney(s.totalSaved),meta:`/ ${formatMoney(s.totalGoal)} · ${Math.round(s.savePct)}%`,bar:s.savePct,barColor:'#F59E0B'})+
+      value:formatMoney(s.totalSaved),meta:`/ ${formatMoney(s.totalGoal)} · ${Math.round(s.savePct)}%`,bar:s.savePct,barColor:'#F59E0B',nav:'savings'})+
     statCard({icon:'bell',bg:rgba('#3B82F6',0.15),color:'#3B82F6',label:t('dash_subscriptions'),
-      value:String(s.subs.length),meta:`${t('dash_monthly_cost')}: ${formatMoney(s.subCost)}`})+
+      value:String(s.subs.length),meta:`${t('dash_monthly_cost')}: ${formatMoney(s.subCost)}`,nav:'subscriptions'})+
     statCard({icon:'check-circle',bg:rgba('#22C55E',0.15),color:'#22C55E',label:t('dash_tasks_due'),
-      value:String(s.dueToday),meta:`${t('dash_overdue')}: ${s.overdue} · ${s.compRate}%`,bar:s.compRate,barColor:'#22C55E'});
+      value:String(s.dueToday),meta:`${t('dash_overdue')}: ${s.overdue} · ${s.compRate}%`,bar:s.compRate,barColor:'#22C55E',nav:'tasks'});
   document.getElementById('stat-grid-2').innerHTML=
     statCard({iconHtml:'<span class="fire">🔥</span>',bg:rgba('#F59E0B',0.12),color:'#F59E0B',label:t('dash_habit_streak'),
-      value:`${s.habitStreak.current} ${t('common_days')}`,meta:`${t('dash_best')}: ${s.habitStreak.best}`})+
+      value:`${s.habitStreak.current} ${t('common_days')}`,meta:`${t('dash_best')}: ${s.habitStreak.best}`,nav:'habits'})+
     statCard({iconHtml:`<span class="fire" style="filter:${s.ns.current>0?'none':'grayscale(1)'}">🔥</span>`,bg:rgba('#F59E0B',0.12),color:'#F59E0B',label:t('dash_no_spend'),
-      value:`${s.ns.current} ${t('common_days')}`,meta:`${t('dash_best')}: ${s.ns.best}`})+
+      value:`${s.ns.current} ${t('common_days')}`,meta:`${t('dash_best')}: ${s.ns.best}`,nav:'noSpend'})+
     statCard({icon:'clock',bg:rgba('#EF4444',0.13),color:'#EF4444',label:t('dash_focus_time'),
-      value:`${s.focusMin} ${t('common_min')}`,meta:`${s.focusSessions} ${t('dash_sessions')}`})+
+      value:`${s.focusMin} ${t('common_min')}`,meta:`${s.focusSessions} ${t('dash_sessions')}`,nav:'tasks',navArg:'timer'})+
     statCard({icon:'droplet',bg:rgba('#3B82F6',0.15),color:'#3B82F6',label:t('dash_hydration'),
-      value:`${s.waterToday} ${s.hyd.unit||'ml'}`,meta:`/ ${s.hyd.goal} ${s.hyd.unit||'ml'}`,bar:s.hyd.goal>0?Math.min(100,(s.waterToday/s.hyd.goal)*100):0,barColor:'#3B82F6'});
+      value:`${s.waterToday} ${s.hyd.unit||'ml'}`,meta:`/ ${s.hyd.goal} ${s.hyd.unit||'ml'}`,bar:s.hyd.goal>0?Math.min(100,(s.waterToday/s.hyd.goal)*100):0,barColor:'#3B82F6',nav:'hydration'});
+  document.querySelectorAll('.stat-card-clickable').forEach(card=>{
+    card.style.cursor='pointer';
+    card.addEventListener('click',()=>{
+      const dest=card.dataset.nav;
+      const arg=card.dataset.navArg;
+      if(dest==='tasks'&&arg==='timer') taskTab='timer';
+      navigateTo(dest);
+    });
+  });
 
   // quick actions
   document.getElementById('qa-title').textContent=t('dash_quick_actions');
@@ -3618,7 +3688,8 @@ function wireEvents(){
   document.getElementById('theme-switch-2').addEventListener('click',toggleTheme);
   // dropdowns
   document.getElementById('lang-toggle').addEventListener('click',e=>{ e.stopPropagation(); const m=document.getElementById('lang-menu'); const open=m.classList.contains('open'); closeDD(); if(!open)m.classList.add('open'); });
-  document.getElementById('cur-toggle').addEventListener('click',e=>{ e.stopPropagation(); const m=document.getElementById('cur-menu'); const open=m.classList.contains('open'); closeDD(); if(!open)m.classList.add('open'); });
+  const curToggleBtn = document.getElementById('cur-toggle');
+  if (curToggleBtn) curToggleBtn.addEventListener('click',e=>{ e.stopPropagation(); const m=document.getElementById('cur-menu'); const open=m.classList.contains('open'); closeDD(); if(!open)m.classList.add('open'); });
   document.addEventListener('click',closeDD);
   // collapse
   document.getElementById('collapse-btn').addEventListener('click',()=>{ document.getElementById('sidebar').classList.toggle('collapsed'); document.body.classList.toggle('sidebar-collapsed'); });
