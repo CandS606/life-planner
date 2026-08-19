@@ -338,6 +338,7 @@ body.sidebar-collapsed #main-content { margin-left: var(--sidebar-collapsed); }
 .stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 32px var(--shadow); }
 .stat-card-clickable:hover { border-color: var(--accent); }
 .stat-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.mini-ring { flex-shrink: 0; }
 .stat-ico {
   width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -3413,6 +3414,10 @@ function computeStats(){
   const habitStreak=computeHabitStreak();
   const ns=DATA.noSpendStreak||{current:0,best:0};
 
+  const dailyHabits=DATA.habits.daily||[];
+  const habitLogToday=(DATA.habits.log||{})[todayStr()]||{};
+  const habitTodayPct=dailyHabits.length>0?Math.round((dailyHabits.filter(h=>habitLogToday[h.id]).length/dailyHabits.length)*100):0;
+
   const today=todayStr();
   const focusMin=(DATA.pomodoroSessions||[]).filter(s=>s.date===today).reduce((s,x)=>s+Number(x.minutes||0),0);
   const focusSessions=(DATA.pomodoroSessions||[]).filter(s=>s.date===today).length;
@@ -3420,7 +3425,7 @@ function computeStats(){
   const hyd=DATA.hydration||{goal:2000,log:[]};
   const waterToday=(hyd.log||[]).filter(l=>l.date===today).reduce((s,l)=>s+Number(l.amount||0),0);
 
-  return {income,expenses,remaining,budgetUsedPct,totalBudget,totalGoal,totalSaved,savePct,subs,subCost,dueToday,overdue,compRate,habitStreak,ns,focusMin,focusSessions,hyd,waterToday};
+  return {income,expenses,remaining,budgetUsedPct,totalBudget,totalGoal,totalSaved,savePct,subs,subCost,dueToday,overdue,compRate,habitStreak,habitTodayPct,ns,focusMin,focusSessions,hyd,waterToday};
 }
 function computeHabitStreak(){
   const log=DATA.habits.log||{}; const daily=DATA.habits.daily||[];
@@ -3430,12 +3435,26 @@ function computeHabitStreak(){
   return {current:cur,best:Math.max(cur,(DATA.habits.bestStreak||0))};
 }
 
+function miniRing(pct, color, size){
+  size = size || 46;
+  const thickness = Math.max(4, Math.round(size*0.13));
+  const r = (size - thickness) / 2, cx = size/2, cy = size/2, circ = 2*Math.PI*r;
+  const clamped = Math.max(0, Math.min(100, pct));
+  const len = (clamped/100) * circ;
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" class="mini-ring">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--bg-tertiary)" stroke-width="${thickness}"></circle>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="${thickness}"
+      stroke-dasharray="${len} ${circ-len}" stroke-linecap="round" transform="rotate(-90 ${cx} ${cy})"></circle>
+    <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" fill="var(--text-primary)" style="font-family:'JetBrains Mono';font-size:${size*0.24}px;font-weight:600;">${Math.round(clamped)}%</text>
+  </svg>`;
+}
 function statCard(opts){
   const clickable = !!opts.nav;
   return `<div class="stat-card${clickable?' stat-card-clickable':''}"${clickable?` data-nav="${opts.nav}"`:''}${opts.navArg?` data-nav-arg="${opts.navArg}"`:''}>
     <div class="stat-head">
       <div class="stat-ico" style="background:${opts.bg};color:${opts.color}">${opts.iconHtml||icon(opts.icon)}</div>
-      <div><div class="stat-label">${opts.label}</div></div>
+      <div style="flex:1;"><div class="stat-label">${opts.label}</div></div>
+      ${opts.ringPct!==undefined?miniRing(opts.ringPct,opts.ringColor||opts.color,46):''}
     </div>
     <div class="stat-value">${opts.value}</div>
     <div class="stat-meta">${opts.meta||''}</div>
@@ -3511,7 +3530,7 @@ function renderDashboard(){
   const grid=document.getElementById('stat-grid');
   grid.innerHTML=
     statCard({icon:'dollar-sign',bg:rgba('#14B8A6',0.15),color:'#14B8A6',label:t('dash_budget_summary'),
-      value:formatMoney(s.income),meta:`${t('dash_expenses')}: ${formatMoney(s.expenses)}`,bar:s.budgetUsedPct,barColor:s.remaining<0?R:G,nav:'budget'})+
+      value:formatMoney(s.income),meta:`${t('dash_expenses')}: ${formatMoney(s.expenses)}`,bar:s.budgetUsedPct,barColor:s.remaining<0?R:G,nav:'budget',ringPct:s.budgetUsedPct,ringColor:s.budgetUsedPct>=90?R:'#14B8A6'})+
     statCard({icon:'target',bg:rgba('#F59E0B',0.15),color:'#F59E0B',label:t('dash_savings_progress'),
       value:formatMoney(s.totalSaved),meta:`/ ${formatMoney(s.totalGoal)} · ${Math.round(s.savePct)}%`,bar:s.savePct,barColor:'#F59E0B',nav:'savings'})+
     statCard({icon:'bell',bg:rgba('#3B82F6',0.15),color:'#3B82F6',label:t('dash_subscriptions'),
@@ -3520,7 +3539,7 @@ function renderDashboard(){
       value:String(s.dueToday),meta:`${t('dash_overdue')}: ${s.overdue} · ${s.compRate}%`,bar:s.compRate,barColor:'#22C55E',nav:'tasks'});
   document.getElementById('stat-grid-2').innerHTML=
     statCard({iconHtml:'<span class="fire">🔥</span>',bg:rgba('#F59E0B',0.12),color:'#F59E0B',label:t('dash_habit_streak'),
-      value:`${s.habitStreak.current} ${t('common_days')}`,meta:`${t('dash_best')}: ${s.habitStreak.best}`,nav:'habits'})+
+      value:`${s.habitStreak.current} ${t('common_days')}`,meta:`${t('dash_best')}: ${s.habitStreak.best}`,nav:'habits',ringPct:s.habitTodayPct,ringColor:'#F59E0B'})+
     statCard({iconHtml:`<span class="fire" style="filter:${s.ns.current>0?'none':'grayscale(1)'}">🔥</span>`,bg:rgba('#F59E0B',0.12),color:'#F59E0B',label:t('dash_no_spend'),
       value:`${s.ns.current} ${t('common_days')}`,meta:`${t('dash_best')}: ${s.ns.best}`,nav:'noSpend'})+
     statCard({icon:'clock',bg:rgba('#EF4444',0.13),color:'#EF4444',label:t('dash_focus_time'),
