@@ -2290,16 +2290,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
           </div>
           <input type="file" id="import-file" accept="application/json" class="hidden">
         </div>
-        <!-- Calendar Sync -->
-        <div class="card set-group">
-          <div class="card-title">Calendar Sync (.ics)</div>
-          <p class="card-sub" style="margin:6px 0 16px;line-height:1.5;">Export your tasks, bill renewals, events and important dates to a calendar file you can import into Apple Calendar, Google Calendar or Outlook. You can also import events from a calendar file to see them here.</p>
-          <div class="set-row">
-            <button class="btn-ghost" id="ics-export-btn" style="color:var(--accent-success);border-color:var(--accent-success);"><span id="ics-exp-ico"></span><span>Export to Calendar (.ics)</span></button>
-            <button class="btn-ghost" id="ics-import-btn" style="color:var(--accent-info);border-color:var(--accent-info);"><span id="ics-imp-ico"></span><span>Import from Calendar (.ics)</span></button>
-          </div>
-          <input type="file" id="ics-import-file" accept=".ics,text/calendar" class="hidden">
-        </div>
         <!-- Google Calendar Live Sync -->
         <div class="card set-group">
           <div class="card-title">Google Calendar Sync (Live)</div>
@@ -3620,8 +3610,6 @@ function injectStaticIcons(){
   document.getElementById('exp-ico').innerHTML=icon('download',16);
   document.getElementById('imp-ico').innerHTML=icon('upload',16);
   document.getElementById('rst-ico').innerHTML=icon('trash',16);
-  document.getElementById('ics-exp-ico').innerHTML=icon('calendar',16);
-  document.getElementById('ics-imp-ico').innerHTML=icon('upload',16);
   document.getElementById('ft-ico').innerHTML=icon('clock',18);
 }
 function wireEvents(){
@@ -3646,9 +3634,6 @@ function wireEvents(){
   document.getElementById('import-btn').addEventListener('click',()=>document.getElementById('import-file').click());
   document.getElementById('import-file').addEventListener('change',e=>{ if(e.target.files[0]){ confirmImport(e.target.files[0]); e.target.value=''; } });
   document.getElementById('reset-btn').addEventListener('click',confirmReset);
-  document.getElementById('ics-export-btn').addEventListener('click',exportICS);
-  document.getElementById('ics-import-btn').addEventListener('click',()=>document.getElementById('ics-import-file').click());
-  document.getElementById('ics-import-file').addEventListener('change',e=>{ if(e.target.files[0]){ importICS(e.target.files[0]); e.target.value=''; } });
   const gcalConnectBtn = document.getElementById('gcal-connect-btn');
   const gcalSyncBtn = document.getElementById('gcal-sync-btn');
   const gcalPullBtn = document.getElementById('gcal-pull-btn');
